@@ -2,7 +2,7 @@
 
 import { createLocalStorageStore } from "@/lib/local-store";
 import { seedOrgAuditEntries, seedOrgUnits } from "@/lib/org-data";
-import type { OrgAuditEntry, OrgUnit } from "@/lib/types";
+import type { OrgAuditEntry, OrgStructureConfig, OrgUnit } from "@/lib/types";
 
 /**
  * Plain (non-React) persistence for org units and their audit trail, mirroring
@@ -11,6 +11,12 @@ import type { OrgAuditEntry, OrgUnit } from "@/lib/types";
  */
 export const orgUnitsStore = createLocalStorageStore<OrgUnit[]>("hrms_org_units", seedOrgUnits);
 export const orgAuditStore = createLocalStorageStore<OrgAuditEntry[]>("hrms_org_audit", seedOrgAuditEntries);
+
+/** siteId -> which org structure levels that tenant has enabled. */
+export const orgStructureConfigStore = createLocalStorageStore<Record<string, OrgStructureConfig>>(
+  "hrms_org_structure_config",
+  {},
+);
 
 export function logOrgAudit(entry: Omit<OrgAuditEntry, "id" | "timestamp">) {
   const record: OrgAuditEntry = {

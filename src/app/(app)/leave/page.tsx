@@ -1,7 +1,7 @@
 "use client";
 
 import { FormEvent, useMemo, useState } from "react";
-import { Check, Plus, X } from "lucide-react";
+import { Check, Plus, X, XCircle } from "lucide-react";
 import { PageHeader } from "@/components/layout/page-header";
 import { Card } from "@/components/ui/card";
 import { Button } from "@/components/ui/button";
@@ -10,59 +10,75 @@ import { Field, Input, Select, Textarea } from "@/components/ui/form";
 import { Tabs } from "@/components/ui/tabs";
 import { StatusBadge } from "@/components/ui/status-badge";
 import { TBody, TableFootnote, Td, Th, THead, Table, Tr } from "@/components/ui/table";
-import {
-  leaveBalances,
-  leaveHistory as initialLeaveHistory,
-  teamLeaveRequests as initialTeamLeaveRequests,
-  currentUser,
-} from "@/lib/mock-data";
-import type { LeaveRequest, LeaveStatus } from "@/lib/types";
+import { Can } from "@/components/auth/permission-gate";
+import { leaveTypeConfig, leaveTypes } from "@/lib/leave-data";
+import { useLeave } from "@/lib/leave-context";
+import { useAccessControl } from "@/lib/access-control-context";
 import { useSite, useSiteFilter } from "@/lib/site-context";
+import { useToast } from "@/lib/toast-context";
+import type { LeaveRequest, LeaveType } from "@/lib/types";
 
 export default function LeavePage() {
+  const { currentUser, canFeature } = useAccessControl();
   const { currentSite, isAllSites } = useSite();
+  const toast = useToast();
+  const { leaveBalances, requestsFor, visibleTeamRequests, applyLeave, approveLeave, rejectLeave, cancelLeave } =
+    useLeave();
+
   const [active, setActive] = useState("my");
-  const [history, setHistory] = useState<LeaveRequest[]>(initialLeaveHistory);
-  const [teamLeaveRequests, setTeamLeaveRequests] = useState<LeaveRequest[]>(initialTeamLeaveRequests);
-  const filteredTeamLeave = useSiteFilter(teamLeaveRequests);
-  const pendingCount = filteredTeamLeave.filter((r) => r.status === "Pending").length;
   const [modalOpen, setModalOpen] = useState(false);
+  const [rejectTarget, setRejectTarget] = useState<LeaveRequest | null>(null);
 
-  const tabs = useMemo(
-    () => [
-      { id: "my", label: "My Leave" },
-      { id: "team", label: pendingCount > 0 ? `Team Leave (${pendingCount})` : "Team Leave" },
-      { id: "calendar", label: "Leave Calendar" },
-    ],
-    [pendingCount],
-  );
+  const canDecideAny = canFeature("leave.requests", "approve") || canFeature("leave.requests", "reject");
+  const myRequests = requestsFor(currentUser.employeeId);
+  const myBalances = leaveBalances.filter((b) => b.employeeId === currentUser.employeeId);
+  const teamRequestsRaw = useMemo(() => visibleTeamRequests(), [visibleTeamRequests]);
+  const filteredTeamLeave = useSiteFilter(teamRequestsRaw);
+  const pendingCount = filteredTeamLeave.filter((r) => r.status === "Pending").length;
 
-  function handleDecision(id: string, status: LeaveStatus) {
-    setTeamLeaveRequests((prev) => prev.map((r) => (r.id === id ? { ...r, status } : r)));
+  const tabs = useMemo(() => {
+    const base = [{ id: "my", label: "My Leave" }];
+    if (canDecideAny) {
+      base.push({ id: "team", label: pendingCount > 0 ? `Team Leave (${pendingCount})` : "Team Leave" });
+    }
+    base.push({ id: "calendar", label: "Leave Calendar" });
+    return base;
+  }, [canDecideAny, pendingCount]);
+
+  function handleApprove(request: LeaveRequest) {
+    const result = approveLeave(request.id);
+    (result.ok ? toast.success : toast.error)(result.message);
+  }
+
+  function handleRejectSubmit(e: FormEvent<HTMLFormElement>) {
+    e.preventDefault();
+    if (!rejectTarget) return;
+    const form = new FormData(e.currentTarget);
+    const reason = String(form.get("reason") ?? "");
+    const result = rejectLeave(rejectTarget.id, reason);
+    (result.ok ? toast.success : toast.error)(result.message);
+    if (result.ok) setRejectTarget(null);
+  }
+
+  function handleCancel(request: LeaveRequest) {
+    const result = cancelLeave(request.id);
+    (result.ok ? toast.success : toast.error)(result.message);
   }
 
   function handleApplyLeave(e: FormEvent<HTMLFormElement>) {
     e.preventDefault();
     const form = new FormData(e.currentTarget);
-    const from = String(form.get("from"));
-    const to = String(form.get("to"));
-    const days =
-      Math.round((new Date(to).getTime() - new Date(from).getTime()) / 86400000) + 1;
-    setHistory((prev) => [
-      {
-        id: String(prev.length + 1),
-        employee: currentUser.name,
-        type: String(form.get("type")) as LeaveRequest["type"],
-        from,
-        to,
-        days: Number.isFinite(days) && days > 0 ? days : 1,
-        status: "Pending",
-        reason: String(form.get("reason") ?? ""),
-      },
-      ...prev,
-    ]);
-    setModalOpen(false);
-    e.currentTarget.reset();
+    const result = applyLeave({
+      type: String(form.get("type")) as LeaveType,
+      from: String(form.get("from")),
+      to: String(form.get("to")),
+      reason: String(form.get("reason") ?? ""),
+    });
+    (result.ok ? toast.success : toast.error)(result.message);
+    if (result.ok) {
+      setModalOpen(false);
+      e.currentTarget.reset();
+    }
   }
 
   return (
@@ -75,28 +91,33 @@ export default function LeavePage() {
             : "Apply for leave and track your leave balance"
         }
         action={
-          <Button onClick={() => setModalOpen(true)}>
-            <Plus className="h-4 w-4" /> Apply Leave
-          </Button>
+          <Can feature="leave.requests" action="create">
+            <Button onClick={() => setModalOpen(true)}>
+              <Plus className="h-4 w-4" /> Apply Leave
+            </Button>
+          </Can>
         }
       />
 
       <div className="grid grid-cols-2 gap-4 sm:grid-cols-4">
-        {leaveBalances.map((l) => (
-          <Card key={l.label} className="p-5 text-center">
-            <p className="text-xl font-bold text-slate-900 dark:text-white">
-              {l.used} <span className="text-sm font-medium text-slate-400 dark:text-slate-500">/ {l.total}</span>
-            </p>
-            <p className="mt-1 text-xs text-slate-500 dark:text-slate-400">{l.label}</p>
-          </Card>
-        ))}
+        {leaveTypes.map((type) => {
+          const bal = myBalances.find((b) => b.type === type) ?? { used: 0, total: leaveTypeConfig[type].annualQuota };
+          return (
+            <Card key={type} className="p-5 text-center">
+              <p className="text-xl font-bold text-slate-900 dark:text-white">
+                {bal.used} <span className="text-sm font-medium text-slate-400 dark:text-slate-500">/ {bal.total}</span>
+              </p>
+              <p className="mt-1 text-xs text-slate-500 dark:text-slate-400">{type}</p>
+            </Card>
+          );
+        })}
       </div>
 
       <Tabs tabs={tabs} active={active} onChange={setActive} />
 
-      {active === "my" && <LeaveTable rows={history} showEmployee={false} />}
-      {active === "team" && (
-        <LeaveTable rows={filteredTeamLeave} showEmployee onDecision={handleDecision} />
+      {active === "my" && <LeaveTable rows={myRequests} showEmployee={false} onCancel={handleCancel} />}
+      {active === "team" && canDecideAny && (
+        <LeaveTable rows={filteredTeamLeave} showEmployee onApprove={handleApprove} onReject={setRejectTarget} />
       )}
       {active === "calendar" && (
         <Card className="p-8 text-center text-sm text-slate-400 dark:text-slate-500">
@@ -107,11 +128,10 @@ export default function LeavePage() {
       <Modal open={modalOpen} onClose={() => setModalOpen(false)} title="Apply Leave">
         <form className="space-y-4" onSubmit={handleApplyLeave}>
           <Field label="Leave Type">
-            <Select name="type" required defaultValue="Casual Leave">
-              <option>Casual Leave</option>
-              <option>Sick Leave</option>
-              <option>Earned Leave</option>
-              <option>Comp Off</option>
+            <Select name="type" required defaultValue={leaveTypes[0]}>
+              {leaveTypes.map((type) => (
+                <option key={type}>{type}</option>
+              ))}
             </Select>
           </Field>
           <div className="grid grid-cols-2 gap-4">
@@ -133,6 +153,29 @@ export default function LeavePage() {
           </div>
         </form>
       </Modal>
+
+      <Modal open={Boolean(rejectTarget)} onClose={() => setRejectTarget(null)} title="Reject Leave Request">
+        {rejectTarget && (
+          <form className="space-y-4" onSubmit={handleRejectSubmit}>
+            <p className="text-sm text-slate-500 dark:text-slate-400">
+              Rejecting <span className="font-medium text-slate-700 dark:text-slate-200">{rejectTarget.employee}</span>
+              &apos;s {rejectTarget.type} request ({rejectTarget.from} to {rejectTarget.to}). A reason is required so
+              they understand why.
+            </p>
+            <Field label="Reason for Rejection">
+              <Textarea name="reason" rows={3} required placeholder="e.g. Team is short-staffed that week" />
+            </Field>
+            <div className="flex justify-end gap-2 pt-2">
+              <Button type="button" variant="outline" onClick={() => setRejectTarget(null)}>
+                Cancel
+              </Button>
+              <Button type="submit" variant="danger">
+                Reject Request
+              </Button>
+            </div>
+          </form>
+        )}
+      </Modal>
     </div>
   );
 }
@@ -140,12 +183,17 @@ export default function LeavePage() {
 function LeaveTable({
   rows,
   showEmployee,
-  onDecision,
+  onApprove,
+  onReject,
+  onCancel,
 }: {
   rows: LeaveRequest[];
   showEmployee: boolean;
-  onDecision?: (id: string, status: LeaveStatus) => void;
+  onApprove?: (request: LeaveRequest) => void;
+  onReject?: (request: LeaveRequest) => void;
+  onCancel?: (request: LeaveRequest) => void;
 }) {
+  const hasActions = Boolean(onApprove || onReject || onCancel);
   return (
     <Card>
       <Table>
@@ -157,7 +205,7 @@ function LeaveTable({
           <Th>Days</Th>
           <Th>Status</Th>
           <Th>Reason</Th>
-          {onDecision && <Th>Actions</Th>}
+          {hasActions && <Th>Actions</Th>}
         </THead>
         <TBody>
           {rows.map((row) => (
@@ -169,32 +217,61 @@ function LeaveTable({
               <Td>{row.days}</Td>
               <Td>
                 <StatusBadge status={row.status} />
+                {row.status !== "Pending" && row.decisionReason && (
+                  <p className="mt-1 max-w-[220px] text-xs text-slate-400 dark:text-slate-500">
+                    {row.decisionReason}
+                  </p>
+                )}
               </Td>
               <Td>{row.reason}</Td>
-              {onDecision && (
+              {hasActions && (
                 <Td>
                   {row.status === "Pending" ? (
                     <div className="flex items-center gap-2">
-                      <button
-                        onClick={() => onDecision(row.id, "Approved")}
-                        className="flex items-center gap-1 rounded-lg bg-emerald-50 px-2.5 py-1.5 text-xs font-medium text-emerald-600 hover:bg-emerald-100 dark:bg-emerald-500/10 dark:text-emerald-400 dark:hover:bg-emerald-500/20"
-                      >
-                        <Check className="h-3.5 w-3.5" /> Approve
-                      </button>
-                      <button
-                        onClick={() => onDecision(row.id, "Rejected")}
-                        className="flex items-center gap-1 rounded-lg bg-rose-50 px-2.5 py-1.5 text-xs font-medium text-rose-600 hover:bg-rose-100 dark:bg-rose-500/10 dark:text-rose-400 dark:hover:bg-rose-500/20"
-                      >
-                        <X className="h-3.5 w-3.5" /> Reject
-                      </button>
+                      {onApprove && (
+                        <button
+                          onClick={() => onApprove(row)}
+                          className="flex items-center gap-1 rounded-lg bg-emerald-50 px-2.5 py-1.5 text-xs font-medium text-emerald-600 hover:bg-emerald-100 dark:bg-emerald-500/10 dark:text-emerald-400 dark:hover:bg-emerald-500/20"
+                        >
+                          <Check className="h-3.5 w-3.5" /> Approve
+                        </button>
+                      )}
+                      {onReject && (
+                        <button
+                          onClick={() => onReject(row)}
+                          className="flex items-center gap-1 rounded-lg bg-rose-50 px-2.5 py-1.5 text-xs font-medium text-rose-600 hover:bg-rose-100 dark:bg-rose-500/10 dark:text-rose-400 dark:hover:bg-rose-500/20"
+                        >
+                          <X className="h-3.5 w-3.5" /> Reject
+                        </button>
+                      )}
+                      {onCancel && (
+                        <button
+                          onClick={() => onCancel(row)}
+                          className="flex items-center gap-1 rounded-lg bg-slate-100 px-2.5 py-1.5 text-xs font-medium text-slate-500 hover:bg-slate-200 dark:bg-slate-800 dark:text-slate-400 dark:hover:bg-slate-700"
+                        >
+                          <XCircle className="h-3.5 w-3.5" /> Withdraw
+                        </button>
+                      )}
                     </div>
                   ) : (
-                    <span className="text-xs text-slate-300 dark:text-slate-600">—</span>
+                    <span className="text-xs text-slate-300 dark:text-slate-600">
+                      {row.approverName ? `by ${row.approverName}` : "—"}
+                    </span>
                   )}
                 </Td>
               )}
             </Tr>
           ))}
+          {rows.length === 0 && (
+            <tr>
+              <td
+                colSpan={(showEmployee ? 7 : 6) + (hasActions ? 1 : 0)}
+                className="px-5 py-10 text-center text-sm text-slate-400 dark:text-slate-500"
+              >
+                No leave requests to show.
+              </td>
+            </tr>
+          )}
         </TBody>
       </Table>
       <TableFootnote>

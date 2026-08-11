@@ -39,7 +39,21 @@
       "Bash(node verify-rbac.mjs)",
       "Bash(node verify-org.mjs)",
       "Bash(node verify-masters.mjs)",
-      "Bash(rm -f /Users/ganeshpandey/Developer/summeet_hrms_fe/verify-masters.mjs /tmp/designation-import-test.csv)"
+      "Bash(rm -f /Users/ganeshpandey/Developer/summeet_hrms_fe/verify-masters.mjs /tmp/designation-import-test.csv)",
+      "Bash(node -e \"const m = require\\('lucide-react'\\); console.log\\(Object.keys\\(m\\).filter\\(k => /slack|team|zoom|video|message|users|credit|card|bio|shield/i.test\\(k\\)\\).join\\('\\\\n'\\)\\)\")",
+      "Bash(node -e \"const m = require\\('lucide-react'\\); ['Database','HardDriveDownload','Send','Info','AlertTriangle','Check','Download'].forEach\\(k => console.log\\(k, k in m\\)\\)\")",
+      "Bash(node verify-all.mjs)",
+      "Bash(node -e ' *)",
+      "Bash(curl -s -o /dev/null -w \"%{http_code}\\\\n\" http://localhost:3000/settings)",
+      "Bash(node verify2.mjs)",
+      "Bash(node verify3.mjs)",
+      "Bash(xargs -I{} echo {})",
+      "Bash(mkdir -p \"/Users/ganeshpandey/Developer/summeet_hrms_fe/src/app/\\(app\\)/organization/units/[type]/[id]\")",
+      "Bash(kill 4459)",
+      "Bash(curl -s -o /dev/null -w \"%{http_code}\\\\n\" http://localhost:3000/attendance)"
+    ],
+    "additionalDirectories": [
+      "/Users/ganeshpandey/Developer/summeet_hrms_fe/src/app/(app)/organization/units/[type]"
     ]
   }
 }

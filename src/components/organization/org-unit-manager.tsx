@@ -1,6 +1,7 @@
 "use client";
 
 import { FormEvent, useEffect, useMemo, useState } from "react";
+import Link from "next/link";
 import { useSearchParams } from "next/navigation";
 import { ArrowDown, ArrowUp, ArrowUpDown, History, Plus, Search, ShieldAlert } from "lucide-react";
 import { Card } from "@/components/ui/card";
@@ -259,9 +260,18 @@ export function OrgUnitManager({ type }: { type: OrgUnitType }) {
                 </Td>
                 <Td>
                   <div className="flex flex-wrap items-center gap-3">
-                    <button onClick={() => setViewUnit(unit)} className="text-sm font-medium text-indigo-600 hover:underline dark:text-indigo-400">
-                      View
-                    </button>
+                    {type === "CostCenter" || type === "ProfitCenter" ? (
+                      <Link
+                        href={`/organization/units/${config.slug}/${unit.id}`}
+                        className="text-sm font-medium text-indigo-600 hover:underline dark:text-indigo-400"
+                      >
+                        View
+                      </Link>
+                    ) : (
+                      <button onClick={() => setViewUnit(unit)} className="text-sm font-medium text-indigo-600 hover:underline dark:text-indigo-400">
+                        View
+                      </button>
+                    )}
                     <Can module="Organization" action="edit">
                       <button onClick={() => setEditUnit(unit)} className="text-sm font-medium text-slate-500 hover:text-slate-700 dark:text-slate-400 dark:hover:text-slate-200">
                         Edit

@@ -30,6 +30,7 @@ export interface Employee {
   locationId?: string;
   plantId?: string;
   costCenterId?: string;
+  profitCenterId?: string;
 }
 
 export type SiteStatus = "Active" | "Trial" | "Suspended";
@@ -104,6 +105,17 @@ export interface OrgUnit {
   updatedOn: string;
 }
 
+/**
+ * Per-site toggle for which levels of the org structure a tenant actually uses.
+ * Missing entries default to enabled so existing sites/org units keep working
+ * unchanged. "Company" is always enabled — every structure needs a root.
+ */
+export interface OrgStructureConfig {
+  enabledTypes: Partial<Record<OrgUnitType, boolean>>;
+  updatedBy?: string;
+  updatedOn?: string;
+}
+
 export type OrgAuditAction = "created" | "updated" | "activated" | "deactivated";
 
 export interface OrgAuditEntry {
@@ -115,6 +127,120 @@ export interface OrgAuditEntry {
   actorName: string;
   detail: string;
   timestamp: string;
+}
+
+/* ------------------------------------------------------------------ */
+/* Cost Center / Profit Center extended site profile                   */
+/* Only meaningful for OrgUnit.type === "CostCenter" | "ProfitCenter" — */
+/* kept in its own store, keyed by orgUnitId, so the other 8 unit types */
+/* (Company, Branch, Department, ...) are completely unaffected.       */
+/* ------------------------------------------------------------------ */
+
+export interface SiteShift {
+  id: string;
+  name: string;
+  startTime: string;
+  endTime: string;
+}
+
+export interface SiteHoliday {
+  id: string;
+  name: string;
+  date: string;
+}
+
+export interface SiteProfile {
+  orgUnitId: string;
+  category: string;
+  currency: string;
+  segment: string;
+  subSegment: string;
+  assetBarcodePrefix: string;
+  activationDateTime: string;
+  address: {
+    line1: string;
+    line2?: string;
+    city: string;
+    state: string;
+    pincode: string;
+    country: string;
+  };
+  contact: {
+    name: string;
+    phone: string;
+    email: string;
+  };
+  physicalLocationNote: string;
+  /** Roles considered "under" this site — e.g. who can approve costs/spend routed through it. */
+  roleIds: string[];
+  shifts: SiteShift[];
+  holidays: SiteHoliday[];
+  updatedBy?: string;
+  updatedOn?: string;
+}
+
+/* ------------------------------------------------------------------ */
+/* Employee <-> Cost Center / Profit Center mapping                    */
+/* Overlay on top of Employee.costCenterId/profitCenterId so the       */
+/* (still mock-data-backed) Employees module doesn't need to change.   */
+/* ------------------------------------------------------------------ */
+
+export interface EmployeeSiteMapping {
+  employeeId: string;
+  costCenterId?: string;
+  profitCenterId?: string;
+  updatedBy?: string;
+  updatedOn?: string;
+}
+
+/* ------------------------------------------------------------------ */
+/* Events                                                               */
+/* ------------------------------------------------------------------ */
+
+export type EventType = "Meeting" | "Training" | "Holiday" | "Company Event" | "Festival" | "Announcement";
+export type EventStatus = "Scheduled" | "Cancelled" | "Completed";
+
+export interface CompanyEvent {
+  id: string;
+  title: string;
+  description: string;
+  type: EventType;
+  startDate: string;
+  endDate: string;
+  startTime?: string;
+  endTime?: string;
+  location: string;
+  siteId?: string;
+  /** Roles this event is visible to. Empty = visible to everyone. */
+  roleIds: string[];
+  status: EventStatus;
+  createdBy: string;
+  createdOn: string;
+}
+
+/* ------------------------------------------------------------------ */
+/* Dynamic Menu / Submenu navigation + Role-Menu mapping                */
+/* Presentation layer only — actual route access is still enforced by  */
+/* PermissionModule/canModule. This controls what appears in the       */
+/* sidebar and to whom, without weakening the real security boundary.  */
+/* ------------------------------------------------------------------ */
+
+export interface MenuItem {
+  id: string;
+  label: string;
+  /** Lucide icon name, resolved via the icon registry in nav-items.ts. */
+  icon: string;
+  href: string;
+  parentId: string | null;
+  order: number;
+  /** Optional link to a real RBAC module — if set, the item still requires canModule(module, "view") too. */
+  module?: PermissionModule;
+  /**
+   * Roles allowed to see this item. `undefined` = fall back to the linked
+   * module's normal RBAC check (today's default behavior, unchanged).
+   * An explicit array (even empty) overrides that and is used as-is.
+   */
+  roleIds?: string[];
 }
 
 /* ------------------------------------------------------------------ */
@@ -184,17 +310,45 @@ export interface MasterAuditEntry {
 }
 
 export type LeaveStatus = "Approved" | "Pending" | "Rejected";
+export type LeaveType = "Casual Leave" | "Sick Leave" | "Earned Leave" | "Comp Off";
 
 export interface LeaveRequest {
   id: string;
+  /** Canonical link to Employee.employeeId — `employee` is kept as a display-name convenience. */
+  employeeId: string;
   employee: string;
-  type: "Casual Leave" | "Sick Leave" | "Earned Leave" | "Comp Off";
+  type: LeaveType;
   from: string;
   to: string;
   days: number;
   status: LeaveStatus;
   reason: string;
   siteId?: string;
+  appliedOn: string;
+  approverId?: string;
+  approverName?: string;
+  /** Required on reject; an optional note on approve. */
+  decisionReason?: string;
+  decidedOn?: string;
+}
+
+export interface LeaveBalance {
+  employeeId: string;
+  type: LeaveType;
+  used: number;
+  total: number;
+}
+
+export type LeaveAuditAction = "applied" | "approved" | "rejected";
+
+export interface LeaveAuditEntry {
+  id: string;
+  leaveRequestId: string;
+  employeeName: string;
+  action: LeaveAuditAction;
+  actorName: string;
+  detail: string;
+  timestamp: string;
 }
 
 export type AttendanceStatus =
@@ -221,6 +375,29 @@ export interface AttendanceReportRow {
   siteId: string;
 }
 
+/* ------------------------------------------------------------------ */
+/* Attendance Regularization                                           */
+/* ------------------------------------------------------------------ */
+
+export type RegularizationStatus = "Pending" | "Approved" | "Rejected";
+
+export interface AttendanceRegularization {
+  id: string;
+  employeeId: string;
+  employee: string;
+  date: string;
+  currentStatus: AttendanceStatus;
+  requestedStatus: AttendanceStatus;
+  reason: string;
+  status: RegularizationStatus;
+  siteId?: string;
+  appliedOn: string;
+  approverId?: string;
+  approverName?: string;
+  decisionReason?: string;
+  decidedOn?: string;
+}
+
 export interface Payslip {
   id: string;
   month: string;
@@ -232,6 +409,53 @@ export interface Payslip {
   bankAccount: string;
   earnings: { label: string; amount: number }[];
   deductions: { label: string; amount: number }[];
+}
+
+/* ------------------------------------------------------------------ */
+/* Payroll — Loans & Tax Declarations                                  */
+/* ------------------------------------------------------------------ */
+
+export type LoanType = "Salary Advance" | "Personal Loan" | "Vehicle Loan" | "Home Loan";
+export type LoanStatus = "Pending" | "Approved" | "Rejected" | "Active" | "Closed";
+
+export interface EmployeeLoan {
+  id: string;
+  employeeId: string;
+  employee: string;
+  type: LoanType;
+  principalAmount: number;
+  emiAmount: number;
+  tenureMonths: number;
+  outstandingAmount: number;
+  status: LoanStatus;
+  reason: string;
+  siteId?: string;
+  appliedOn: string;
+  approverId?: string;
+  approverName?: string;
+  decisionReason?: string;
+  decidedOn?: string;
+}
+
+export type TaxRegime = "Old Regime" | "New Regime";
+export type TaxDeclarationStatus = "Draft" | "Submitted" | "Verified" | "Rejected";
+
+export interface TaxDeclaration {
+  id: string;
+  employeeId: string;
+  employee: string;
+  financialYear: string;
+  regime: TaxRegime;
+  section80C: number;
+  section80D: number;
+  hraExemptionClaimed: number;
+  otherExemptions: number;
+  status: TaxDeclarationStatus;
+  siteId?: string;
+  submittedOn?: string;
+  verifiedBy?: string;
+  verifiedOn?: string;
+  decisionReason?: string;
 }
 
 export type JobStatus = "Active" | "Closed" | "On Hold";
@@ -298,6 +522,7 @@ export const permissionModules = [
   "Training",
   "Assets",
   "Reports",
+  "Events",
   "Settings",
 ] as const;
 
@@ -381,4 +606,72 @@ export interface SecurityEvent {
   detail: string;
   ip: string;
   timestamp: string;
+}
+
+/* ------------------------------------------------------------------ */
+/* Application Settings                                                */
+/* ------------------------------------------------------------------ */
+
+export interface GeneralSettings {
+  name: string;
+  logoDataUrl?: string;
+}
+
+export interface OrganizationProfileSettings {
+  legalName: string;
+  registrationNumber: string;
+  taxId: string;
+  industry: string;
+  companySize: string;
+  website: string;
+  address: string;
+  fiscalYearStartMonth: string;
+}
+
+export interface LocalizationSettings {
+  timezone: string;
+  language: string;
+  country: string;
+  dateFormat: string;
+  timeFormat: string;
+  numberFormat: string;
+  currency: string;
+  weekStart: string;
+}
+
+export type SmtpEncryption = "None" | "SSL" | "TLS";
+
+export interface EmailSettings {
+  smtpHost: string;
+  smtpPort: string;
+  smtpUsername: string;
+  smtpPassword: string;
+  fromName: string;
+  fromEmail: string;
+  encryption: SmtpEncryption;
+  notifications: Record<string, boolean>;
+}
+
+export interface BackupSettings {
+  autoBackupEnabled: boolean;
+  frequency: "Daily" | "Weekly" | "Monthly";
+  retentionDays: number;
+  lastBackupAt?: string;
+}
+
+export interface AppSettings {
+  general: GeneralSettings;
+  organization: OrganizationProfileSettings;
+  localization: LocalizationSettings;
+  email: EmailSettings;
+  integrations: Record<string, boolean>;
+  backup: BackupSettings;
+}
+
+export interface BackupHistoryEntry {
+  id: string;
+  timestamp: string;
+  sizeLabel: string;
+  triggeredBy: string;
+  type: "Manual" | "Automatic";
 }

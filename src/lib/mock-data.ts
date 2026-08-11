@@ -6,7 +6,6 @@ import type {
   Department,
   Employee,
   JobOpening,
-  LeaveRequest,
   PackagePlan,
   Payslip,
   PerformanceReview,
@@ -153,13 +152,6 @@ export const departments: Department[] = [
 // Designation is now a configurable Master (see @/lib/master-data) instead of
 // a hardcoded array, so it can be managed centrally like every other master.
 
-export const leaveHistory: LeaveRequest[] = [
-  { id: "1", employee: "Ganesh Pandey", type: "Casual Leave", from: "2024-05-30", to: "2024-05-31", days: 2, status: "Approved", reason: "Personal Work", siteId: "site-1" },
-  { id: "2", employee: "Ganesh Pandey", type: "Sick Leave", from: "2024-05-10", to: "2024-05-11", days: 2, status: "Approved", reason: "Fever", siteId: "site-1" },
-  { id: "3", employee: "Ganesh Pandey", type: "Earned Leave", from: "2024-04-01", to: "2024-04-05", days: 5, status: "Approved", reason: "Vacation", siteId: "site-1" },
-  { id: "4", employee: "Ganesh Pandey", type: "Comp Off", from: "2024-03-15", to: "2024-03-15", days: 1, status: "Rejected", reason: "Worked on Holiday", siteId: "site-1" },
-];
-
 const attendanceOverrides: Record<number, AttendanceStatus> = {
   4: "Weekend", 5: "Weekend",
   10: "Half Day",
@@ -277,20 +269,6 @@ export const payrollCostByDept = [
   { name: "Sales & Marketing", value: 20, color: "#f59e0b" },
   { name: "HR", value: 20, color: "#0ea5e9" },
   { name: "Finance", value: 20, color: "#10b981" },
-];
-
-export const leaveBalances = [
-  { label: "Casual Leave", used: 12, total: 15 },
-  { label: "Sick Leave", used: 10, total: 12 },
-  { label: "Earned Leave", used: 18, total: 20 },
-  { label: "Comp Off", used: 4, total: 5 },
-];
-
-export const teamLeaveRequests: LeaveRequest[] = [
-  { id: "5", employee: "Rohit Sharma", type: "Casual Leave", from: "2024-05-22", to: "2024-05-23", days: 2, status: "Pending", reason: "Family function", siteId: "site-1" },
-  { id: "6", employee: "Priya Singh", type: "Sick Leave", from: "2024-05-18", to: "2024-05-18", days: 1, status: "Approved", reason: "Fever", siteId: "site-2" },
-  { id: "7", employee: "Vikram Desai", type: "Earned Leave", from: "2024-06-03", to: "2024-06-07", days: 5, status: "Pending", reason: "Vacation", siteId: "site-2" },
-  { id: "8", employee: "Sneha Kapoor", type: "Comp Off", from: "2024-05-11", to: "2024-05-11", days: 1, status: "Approved", reason: "Worked on weekend", siteId: "site-3" },
 ];
 
 export interface Document {

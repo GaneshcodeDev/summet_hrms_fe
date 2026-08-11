@@ -3,11 +3,13 @@
 import { ReactNode } from "react";
 import Link from "next/link";
 import { usePathname } from "next/navigation";
-import { Database, GitCommitHorizontal, LayoutDashboard, Network, UsersRound, type LucideIcon } from "lucide-react";
+import { Database, GitCommitHorizontal, LayoutDashboard, Network, UserCog, UsersRound, type LucideIcon } from "lucide-react";
 import { Card } from "@/components/ui/card";
 import { PageHeader } from "@/components/layout/page-header";
 import { cn } from "@/lib/utils";
 import { orgUnitTypeList } from "@/lib/org-data";
+import { useOrg } from "@/lib/org-context";
+import { useSite } from "@/lib/site-context";
 
 interface Section {
   id: string;
@@ -21,14 +23,8 @@ const overviewSections: Section[] = [
   { id: "hierarchy", label: "Hierarchy", href: "/organization/hierarchy", icon: Network },
   { id: "chart", label: "Org Chart", href: "/organization/chart", icon: GitCommitHorizontal },
   { id: "reporting", label: "Reporting Structure", href: "/organization/reporting", icon: UsersRound },
+  { id: "employee-mapping", label: "Employee Site Mapping", href: "/organization/employee-mapping", icon: UserCog },
 ];
-
-const unitSections: Section[] = orgUnitTypeList.map((c) => ({
-  id: c.slug,
-  label: c.pluralLabel,
-  href: `/organization/units/${c.slug}`,
-  icon: c.icon,
-}));
 
 const mastersSection: Section = {
   id: "masters",
@@ -56,6 +52,21 @@ function SectionLink({ section, active }: { section: Section; active: boolean })
 
 export default function OrganizationLayout({ children }: { children: ReactNode }) {
   const pathname = usePathname();
+  const { isAllSites, currentSiteId } = useSite();
+  const { getEnabledUnitTypes } = useOrg();
+
+  // "All Sites" has no single structure config to filter by, so show every level.
+  // Once a specific tenant is selected, only show the levels it has enabled
+  // (Settings > Organization Structure).
+  const enabledTypes = isAllSites ? null : getEnabledUnitTypes(currentSiteId);
+  const unitSections: Section[] = orgUnitTypeList
+    .filter((c) => !enabledTypes || enabledTypes.includes(c.type))
+    .map((c) => ({
+      id: c.slug,
+      label: c.pluralLabel,
+      href: `/organization/units/${c.slug}`,
+      icon: c.icon,
+    }));
 
   function isActive(href: string) {
     return pathname === href || pathname.startsWith(`${href}/`);

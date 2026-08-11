@@ -9,6 +9,7 @@ const sections = [
   { id: "users", label: "Users", href: "/access-control/users" },
   { id: "roles", label: "Roles", href: "/access-control/roles" },
   { id: "permissions", label: "Permission Matrix", href: "/access-control/permissions" },
+  { id: "menu", label: "Menu Management", href: "/access-control/menu" },
   { id: "security", label: "Security & Audit", href: "/access-control/security" },
 ];
 

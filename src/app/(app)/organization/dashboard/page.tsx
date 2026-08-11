@@ -24,13 +24,15 @@ const auditActionTone: Record<string, "emerald" | "indigo" | "rose"> = {
 };
 
 export default function OrganizationDashboardPage() {
-  const { orgUnits, auditEntries } = useOrg();
+  const { orgUnits, auditEntries, getEnabledUnitTypes } = useOrg();
   const { currentSiteId, isAllSites } = useSite();
 
   const scopedUnits = isAllSites ? orgUnits : orgUnits.filter((u) => u.siteId === currentSiteId);
   const activeCount = scopedUnits.filter((u) => u.status === "Active").length;
   const inactiveCount = scopedUnits.length - activeCount;
   const companyCount = scopedUnits.filter((u) => u.type === "Company").length;
+  const enabledTypes = isAllSites ? null : getEnabledUnitTypes(currentSiteId);
+  const visibleTypeList = orgUnitTypeList.filter((c) => !enabledTypes || enabledTypes.includes(c.type));
 
   return (
     <div className="space-y-6">
@@ -46,7 +48,7 @@ export default function OrganizationDashboardPage() {
           <CardTitle>Entity Types</CardTitle>
         </CardHeader>
         <CardContent className="grid grid-cols-1 gap-3 pt-3 sm:grid-cols-2 xl:grid-cols-3">
-          {orgUnitTypeList.map((config) => {
+          {visibleTypeList.map((config) => {
             const count = scopedUnits.filter((u) => u.type === config.type).length;
             const active = scopedUnits.filter((u) => u.type === config.type && u.status === "Active").length;
             const Icon = config.icon;

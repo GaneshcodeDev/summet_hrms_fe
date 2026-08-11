@@ -3,12 +3,14 @@
 import Link from "next/link";
 import { useRouter } from "next/navigation";
 import { useState } from "react";
-import { Bell, CalendarOff, ChevronDown, LogOut, Network, RefreshCw, Search, ShieldCheck, UserRound } from "lucide-react";
+import { Bell, CalendarCheck, CalendarOff, ChevronDown, LogOut, Network, RefreshCw, Search, ShieldCheck, UserRound } from "lucide-react";
 import { Avatar } from "@/components/ui/avatar";
 import { logout } from "@/lib/auth";
-import { recentActivities, teamLeaveRequests } from "@/lib/mock-data";
+import { recentActivities } from "@/lib/mock-data";
 import { useCurrentUser } from "@/lib/access-control-context";
 import { useOrg } from "@/lib/org-context";
+import { useLeave } from "@/lib/leave-context";
+import { useRegularization } from "@/lib/regularization-context";
 import { SiteSwitcher } from "@/components/layout/site-switcher";
 import { ThemeToggle } from "@/components/layout/theme-toggle";
 
@@ -16,10 +18,13 @@ export function Topbar({ title }: { title?: string }) {
   const router = useRouter();
   const currentUser = useCurrentUser();
   const { auditEntries: orgAuditEntries } = useOrg();
+  const { visibleTeamRequests } = useLeave();
+  const { visibleTeamRequests: visibleTeamRegularizations } = useRegularization();
   const [open, setOpen] = useState(false);
   const [notifOpen, setNotifOpen] = useState(false);
   const [notifSeen, setNotifSeen] = useState(false);
-  const pendingApprovals = teamLeaveRequests.filter((r) => r.status === "Pending").length;
+  const pendingApprovals = visibleTeamRequests().filter((r) => r.status === "Pending").length;
+  const pendingRegularizations = visibleTeamRegularizations().filter((r) => r.status === "Pending").length;
 
   function handleLogout() {
     logout();
@@ -87,6 +92,24 @@ export function Topbar({ title }: { title?: string }) {
                         {pendingApprovals} leave {pendingApprovals === 1 ? "request" : "requests"} awaiting your approval
                       </p>
                       <p className="text-xs text-slate-400 dark:text-slate-500">Team Leave</p>
+                    </div>
+                  </Link>
+                )}
+
+                {pendingRegularizations > 0 && (
+                  <Link
+                    href="/attendance"
+                    onClick={() => setNotifOpen(false)}
+                    className="flex items-center gap-3 border-b border-slate-100 bg-amber-50/60 px-4 py-3 hover:bg-amber-50 dark:border-slate-800 dark:bg-amber-500/5 dark:hover:bg-amber-500/10"
+                  >
+                    <div className="flex h-8 w-8 shrink-0 items-center justify-center rounded-lg bg-amber-100 text-amber-600 dark:bg-amber-500/15 dark:text-amber-400">
+                      <CalendarCheck className="h-4 w-4" />
+                    </div>
+                    <div className="min-w-0">
+                      <p className="text-sm font-medium text-slate-800 dark:text-slate-100">
+                        {pendingRegularizations} attendance {pendingRegularizations === 1 ? "regularization" : "regularizations"} awaiting your approval
+                      </p>
+                      <p className="text-xs text-slate-400 dark:text-slate-500">Attendance</p>
                     </div>
                   </Link>
                 )}

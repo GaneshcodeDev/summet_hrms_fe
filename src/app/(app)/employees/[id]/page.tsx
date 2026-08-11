@@ -29,12 +29,11 @@ import {
   getEmployeeById,
   getEmployeeDocuments,
   getEmployeeSalaryStructure,
-  leaveBalances,
-  leaveHistory,
   performanceReviews,
 } from "@/lib/mock-data";
 import { useSite } from "@/lib/site-context";
 import { useAccessControl } from "@/lib/access-control-context";
+import { useLeave } from "@/lib/leave-context";
 import { useNow } from "@/lib/use-now";
 import { changePassword, getSession, revokeOtherSessions, revokeSession } from "@/lib/auth";
 
@@ -77,6 +76,7 @@ function EmployeeProfileClient({ id }: { id: string }) {
   const searchParams = useSearchParams();
   const { sites } = useSite();
   const { currentUser: signedInUser, canFeature, deviceSessions, securityEvents } = useAccessControl();
+  const { balancesFor, requestsFor } = useLeave();
   const now = useNow();
 
   const employee = getEmployeeById(id);
@@ -112,7 +112,8 @@ function EmployeeProfileClient({ id }: { id: string }) {
   const documents = getEmployeeDocuments(employee);
   const bank = getEmployeeBankDetail();
   const salary = getEmployeeSalaryStructure(employee);
-  const employeeLeaves = leaveHistory.filter((l) => l.employee === employee.name);
+  const employeeLeaves = requestsFor(employee.employeeId);
+  const employeeLeaveBalances = balancesFor(employee.employeeId);
   const review = performanceReviews.find((r) => r.employee === employee.name);
 
   const mySessions = isOwnProfile
@@ -328,17 +329,17 @@ function EmployeeProfileClient({ id }: { id: string }) {
             {active === "leave" && (
               <CardContent className="space-y-5">
                 <div className="grid grid-cols-2 gap-3 sm:grid-cols-4">
-                  {leaveBalances.map((l) => (
-                    <div key={l.label} className="rounded-xl border border-slate-100 p-3 text-center dark:border-slate-800">
+                  {employeeLeaveBalances.map((l) => (
+                    <div key={l.type} className="rounded-xl border border-slate-100 p-3 text-center dark:border-slate-800">
                       <p className="text-sm font-bold text-slate-800 dark:text-slate-100">
                         {l.used}/{l.total}
                       </p>
-                      <p className="text-xs text-slate-400 dark:text-slate-500">{l.label}</p>
+                      <p className="text-xs text-slate-400 dark:text-slate-500">{l.type}</p>
                     </div>
                   ))}
                 </div>
                 <div className="divide-y divide-slate-100 dark:divide-slate-800">
-                  {(employeeLeaves.length ? employeeLeaves : leaveHistory).map((l) => (
+                  {employeeLeaves.map((l) => (
                     <div key={l.id} className="flex items-center justify-between py-3 text-sm">
                       <div>
                         <p className="font-medium text-slate-700 dark:text-slate-200">{l.type}</p>
@@ -349,6 +350,11 @@ function EmployeeProfileClient({ id }: { id: string }) {
                       <StatusBadge status={l.status} />
                     </div>
                   ))}
+                  {employeeLeaves.length === 0 && (
+                    <p className="py-6 text-center text-sm text-slate-400 dark:text-slate-500">
+                      No leave requests on record.
+                    </p>
+                  )}
                 </div>
               </CardContent>
             )}

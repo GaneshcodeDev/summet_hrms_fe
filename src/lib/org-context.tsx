@@ -8,10 +8,11 @@ import {
   useSyncExternalStore,
   type ReactNode,
 } from "react";
-import { orgAuditStore, orgUnitsStore, logOrgAudit } from "@/lib/org-store";
+import { orgAuditStore, orgStructureConfigStore, orgUnitsStore, logOrgAudit } from "@/lib/org-store";
 import { orgUnitTypeConfig } from "@/lib/org-data";
 import { useAccessControl } from "@/lib/access-control-context";
-import type { AccountStatus, OrgAuditEntry, OrgUnit, OrgUnitType } from "@/lib/types";
+import { orgUnitTypes } from "@/lib/types";
+import type { AccountStatus, OrgAuditEntry, OrgStructureConfig, OrgUnit, OrgUnitType } from "@/lib/types";
 
 type OrgUnitDraft = Pick<OrgUnit, "type" | "name" | "code" | "parentId" | "siteId"> &
   Partial<Pick<OrgUnit, "headEmployeeId" | "description" | "locationKind">>;
@@ -30,6 +31,11 @@ interface OrgContextValue {
   createOrgUnit: (input: OrgUnitDraft) => OrgUnit;
   updateOrgUnit: (id: string, patch: OrgUnitEditable) => void;
   setOrgUnitStatus: (id: string, status: AccountStatus) => void;
+  /** siteId -> structure config. Read directly when you need updatedBy/updatedOn, not just the boolean. */
+  orgStructureConfig: Record<string, OrgStructureConfig>;
+  isUnitTypeEnabled: (siteId: string, type: OrgUnitType) => boolean;
+  getEnabledUnitTypes: (siteId: string) => OrgUnitType[];
+  setUnitTypeEnabled: (siteId: string, type: OrgUnitType, enabled: boolean) => void;
 }
 
 const OrgContext = createContext<OrgContextValue | undefined>(undefined);
@@ -162,6 +168,41 @@ export function OrgProvider({ children }: { children: ReactNode }) {
     [currentUser.name],
   );
 
+  const orgStructureConfig = useSyncExternalStore(
+    orgStructureConfigStore.subscribe,
+    orgStructureConfigStore.getSnapshot,
+    orgStructureConfigStore.getServerSnapshot,
+  );
+
+  const isUnitTypeEnabled = useCallback(
+    (siteId: string, type: OrgUnitType) => {
+      if (type === "Company") return true; // root of the tree — always required
+      const enabled = orgStructureConfig[siteId]?.enabledTypes[type];
+      return enabled !== false;
+    },
+    [orgStructureConfig],
+  );
+
+  const getEnabledUnitTypes = useCallback(
+    (siteId: string) => orgUnitTypes.filter((type) => isUnitTypeEnabled(siteId, type)),
+    [isUnitTypeEnabled],
+  );
+
+  const setUnitTypeEnabled = useCallback(
+    (siteId: string, type: OrgUnitType, enabled: boolean) => {
+      if (type === "Company") return; // guard: root type can't be turned off
+      orgStructureConfigStore.update((cfg) => ({
+        ...cfg,
+        [siteId]: {
+          enabledTypes: { ...cfg[siteId]?.enabledTypes, [type]: enabled },
+          updatedBy: currentUser.name,
+          updatedOn: new Date().toISOString(),
+        },
+      }));
+    },
+    [currentUser.name],
+  );
+
   const value = useMemo<OrgContextValue>(
     () => ({
       orgUnits,
@@ -173,8 +214,26 @@ export function OrgProvider({ children }: { children: ReactNode }) {
       createOrgUnit,
       updateOrgUnit,
       setOrgUnitStatus,
+      orgStructureConfig,
+      isUnitTypeEnabled,
+      getEnabledUnitTypes,
+      setUnitTypeEnabled,
     }),
-    [orgUnits, auditEntries, childrenOf, descendantIdsOf, ancestorsOf, auditFor, createOrgUnit, updateOrgUnit, setOrgUnitStatus],
+    [
+      orgUnits,
+      auditEntries,
+      childrenOf,
+      descendantIdsOf,
+      ancestorsOf,
+      auditFor,
+      createOrgUnit,
+      updateOrgUnit,
+      setOrgUnitStatus,
+      orgStructureConfig,
+      isUnitTypeEnabled,
+      getEnabledUnitTypes,
+      setUnitTypeEnabled,
+    ],
   );
 
   return <OrgContext.Provider value={value}>{children}</OrgContext.Provider>;

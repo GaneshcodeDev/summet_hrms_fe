@@ -36,6 +36,7 @@ export const featureCatalog: PermissionFeature[] = [
   { id: "access-control.roles", module: "AccessControl", label: "Role Management", description: "Define configurable roles", actions: ["view", "create", "edit", "delete", "manage"] },
   { id: "access-control.permissions", module: "AccessControl", label: "Permission Matrix", description: "Grant module/feature/action permissions to roles", actions: ["view", "edit", "manage"] },
   { id: "access-control.security", module: "AccessControl", label: "Security & Audit Log", description: "Login activity, lockouts, unlock accounts", actions: ["view", "export", "manage"] },
+  { id: "access-control.menu", module: "AccessControl", label: "Menu Management", description: "Sidebar menus/submenus and which roles see them", actions: ["view", "create", "edit", "delete", "manage"] },
 
   { id: "sites.tenants", module: "Sites", label: "Tenant Sites", description: "Onboard and manage tenant sites", actions: ["view", "create", "edit", "delete", "manage"] },
 
@@ -43,16 +44,19 @@ export const featureCatalog: PermissionFeature[] = [
   { id: "employees.documents", module: "Employees", label: "Employee Documents", description: "ID proofs, offer/relieving letters", actions: ["view", "edit", "manage"] },
 
   { id: "organization.structure", module: "Organization", label: "Org Structure", description: "Company hierarchy, org chart and reporting structure", actions: ["view", "create", "edit", "delete", "manage"] },
+  { id: "organization.site-mapping", module: "Organization", label: "Employee Site Mapping", description: "Map employees to a Cost Center / Profit Center", actions: ["view", "edit", "manage"] },
 
   { id: "masters.records", module: "Masters", label: "Master Data", description: "Configurable reference data shared across every module", actions: ["view", "create", "edit", "export", "import", "manage"] },
 
-  { id: "attendance.records", module: "Attendance", label: "Attendance Records", description: "Daily attendance and reports", actions: ["view", "create", "edit", "export", "manage"] },
+  { id: "attendance.records", module: "Attendance", label: "Attendance Records", description: "Daily attendance and reports", actions: ["view", "create", "edit", "approve", "reject", "export", "manage"] },
 
   { id: "leave.requests", module: "Leave", label: "Leave Requests", description: "Apply for and approve leave", actions: ["view", "create", "edit", "approve", "reject", "manage"] },
 
   { id: "payroll.payslips", module: "Payroll", label: "Payslips", description: "Monthly payslips", actions: ["view", "export", "manage"], sensitive: true },
   { id: "payroll.salary", module: "Payroll", label: "Salary Structure", description: "CTC, earnings and deductions", actions: ["view", "edit", "manage"], sensitive: true },
   { id: "payroll.bank", module: "Payroll", label: "Bank Details", description: "Bank account and PAN/UAN", actions: ["view", "edit", "manage"], sensitive: true },
+  { id: "payroll.loans", module: "Payroll", label: "Employee Loans", description: "Salary advances and loan repayments", actions: ["view", "create", "approve", "reject", "manage"], sensitive: true },
+  { id: "payroll.tax", module: "Payroll", label: "Tax Declarations", description: "Investment declarations and regime selection", actions: ["view", "create", "edit", "manage"], sensitive: true },
 
   { id: "recruitment.openings", module: "Recruitment", label: "Job Openings", description: "Requisitions and applicants", actions: ["view", "create", "edit", "delete", "manage"] },
 
@@ -63,6 +67,8 @@ export const featureCatalog: PermissionFeature[] = [
   { id: "assets.inventory", module: "Assets", label: "Asset Inventory", description: "Company asset assignment", actions: ["view", "create", "edit", "delete", "manage"] },
 
   { id: "reports.analytics", module: "Reports", label: "Reports & Analytics", description: "Cross-module reporting", actions: ["view", "export", "manage"] },
+
+  { id: "events.calendar", module: "Events", label: "Company Events", description: "Meetings, training, holidays and announcements", actions: ["view", "create", "edit", "delete", "manage"] },
 
   { id: "settings.organization", module: "Settings", label: "Organization Settings", description: "General, localization, integrations", actions: ["view", "edit", "manage"] },
 ];
@@ -117,12 +123,17 @@ export const seedRolePermissions: Record<string, RolePermissionMap> = {
       "dashboard.overview": ["view"],
       "leave.requests": ["view", "edit", "approve", "reject"],
       "payroll.payslips": ["view", "export"],
+      "payroll.loans": ["view", "approve", "reject"],
+      "payroll.tax": ["view", "edit"],
       "assets.inventory": ["view", "edit"],
       "reports.analytics": ["view", "export"],
       "settings.organization": ["view", "edit"],
       "access-control.roles": ["view"],
       "access-control.permissions": ["view"],
       "access-control.security": ["view"],
+      "access-control.menu": ["view", "edit"],
+      "organization.site-mapping": ["view", "edit"],
+      "events.calendar": ["view", "create", "edit", "delete"],
     }),
   },
 
@@ -132,13 +143,15 @@ export const seedRolePermissions: Record<string, RolePermissionMap> = {
     "employees.documents": ["view", "edit"],
     "organization.structure": ["view", "edit"],
     "masters.records": ["view", "edit"],
-    "attendance.records": ["view", "edit", "export"],
+    "attendance.records": ["view", "edit", "approve", "reject", "export"],
     "leave.requests": ["view", "edit", "approve", "reject"],
     "payroll.payslips": ["view"],
     "recruitment.openings": ["view", "create", "edit"],
     "performance.reviews": ["view", "create", "edit"],
     "training.programs": ["view", "create", "edit"],
     "reports.analytics": ["view", "export"],
+    "organization.site-mapping": ["view", "edit"],
+    "events.calendar": ["view", "create", "edit"],
   }),
 
   "role-payroll-admin": grantActions({
@@ -148,6 +161,8 @@ export const seedRolePermissions: Record<string, RolePermissionMap> = {
     "payroll.payslips": ["view", "export", "manage"],
     "payroll.salary": ["view", "edit", "manage"],
     "payroll.bank": ["view", "edit", "manage"],
+    "payroll.loans": ["view", "approve", "reject", "manage"],
+    "payroll.tax": ["view", "edit", "manage"],
     "reports.analytics": ["view", "export"],
   }),
 
@@ -157,6 +172,8 @@ export const seedRolePermissions: Record<string, RolePermissionMap> = {
     "leave.requests": ["view"],
     "payroll.payslips": ["view", "export"],
     "payroll.salary": ["view"],
+    "payroll.loans": ["view"],
+    "payroll.tax": ["view"],
     "reports.analytics": ["view", "export"],
   }),
 
@@ -164,18 +181,20 @@ export const seedRolePermissions: Record<string, RolePermissionMap> = {
     "dashboard.overview": ["view"],
     "employees.directory": ["view"],
     "organization.structure": ["view"],
-    "attendance.records": ["view", "edit"],
+    "attendance.records": ["view", "edit", "approve", "reject"],
     "leave.requests": ["view", "approve", "reject"],
     "performance.reviews": ["view", "create", "edit", "approve"],
     "reports.analytics": ["view"],
+    "events.calendar": ["view"],
   }),
 
   "role-manager": grantActions({
     "dashboard.overview": ["view"],
     "employees.directory": ["view"],
-    "attendance.records": ["view"],
+    "attendance.records": ["view", "approve", "reject"],
     "leave.requests": ["view", "approve", "reject"],
     "performance.reviews": ["view", "edit"],
+    "events.calendar": ["view"],
   }),
 
   "role-employee": grantActions({
@@ -184,8 +203,11 @@ export const seedRolePermissions: Record<string, RolePermissionMap> = {
     "organization.structure": ["view"],
     "attendance.records": ["view", "create"],
     "leave.requests": ["view", "create"],
+    "payroll.loans": ["view", "create"],
+    "payroll.tax": ["view", "create", "edit"],
     "performance.reviews": ["view"],
     "training.programs": ["view"],
+    "events.calendar": ["view"],
   }),
 
   "role-auditor": grantActions({
@@ -195,9 +217,14 @@ export const seedRolePermissions: Record<string, RolePermissionMap> = {
     "attendance.records": ["view"],
     "leave.requests": ["view"],
     "payroll.payslips": ["view"],
+    "payroll.loans": ["view"],
+    "payroll.tax": ["view"],
     "recruitment.openings": ["view"],
     "performance.reviews": ["view"],
     "reports.analytics": ["view", "export"],
+    "organization.site-mapping": ["view"],
+    "events.calendar": ["view"],
+    "access-control.menu": ["view"],
     "access-control.security": ["view", "export"],
   }),
 };

@@ -15,6 +15,7 @@ const routeModuleMap: Array<{ prefix: string; module: PermissionModule }> = [
   { prefix: "/training", module: "Training" },
   { prefix: "/assets", module: "Assets" },
   { prefix: "/reports", module: "Reports" },
+  { prefix: "/events", module: "Events" },
   { prefix: "/settings", module: "Settings" },
 ];
 
