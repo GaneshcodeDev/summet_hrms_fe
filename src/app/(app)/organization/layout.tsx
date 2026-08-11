@@ -3,7 +3,7 @@
 import { ReactNode } from "react";
 import Link from "next/link";
 import { usePathname } from "next/navigation";
-import { GitCommitHorizontal, IdCard, LayoutDashboard, Network, UsersRound, type LucideIcon } from "lucide-react";
+import { Database, GitCommitHorizontal, LayoutDashboard, Network, UsersRound, type LucideIcon } from "lucide-react";
 import { Card } from "@/components/ui/card";
 import { PageHeader } from "@/components/layout/page-header";
 import { cn } from "@/lib/utils";
@@ -30,11 +30,11 @@ const unitSections: Section[] = orgUnitTypeList.map((c) => ({
   icon: c.icon,
 }));
 
-const designationSection: Section = {
-  id: "designations",
-  label: "Designations",
-  href: "/organization/designations",
-  icon: IdCard,
+const mastersSection: Section = {
+  id: "masters",
+  label: "More Masters (Designation, Job Grade...)",
+  href: "/masters/directory",
+  icon: Database,
 };
 
 function SectionLink({ section, active }: { section: Section; active: boolean }) {
@@ -82,7 +82,7 @@ export default function OrganizationLayout({ children }: { children: ReactNode }
           ))}
 
           <div className="my-1 border-t border-slate-100 dark:border-slate-800" />
-          <SectionLink section={designationSection} active={isActive(designationSection.href)} />
+          <SectionLink section={mastersSection} active={isActive(mastersSection.href)} />
         </Card>
 
         <div className="lg:col-span-3">{children}</div>

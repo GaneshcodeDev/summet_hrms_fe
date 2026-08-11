@@ -42,7 +42,9 @@ export const featureCatalog: PermissionFeature[] = [
   { id: "employees.directory", module: "Employees", label: "Employee Directory", description: "Employee records", actions: ["view", "create", "edit", "delete", "export", "import", "manage"] },
   { id: "employees.documents", module: "Employees", label: "Employee Documents", description: "ID proofs, offer/relieving letters", actions: ["view", "edit", "manage"] },
 
-  { id: "organization.structure", module: "Organization", label: "Org Structure", description: "Departments, designations, org chart", actions: ["view", "create", "edit", "delete", "manage"] },
+  { id: "organization.structure", module: "Organization", label: "Org Structure", description: "Company hierarchy, org chart and reporting structure", actions: ["view", "create", "edit", "delete", "manage"] },
+
+  { id: "masters.records", module: "Masters", label: "Master Data", description: "Configurable reference data shared across every module", actions: ["view", "create", "edit", "export", "import", "manage"] },
 
   { id: "attendance.records", module: "Attendance", label: "Attendance Records", description: "Daily attendance and reports", actions: ["view", "create", "edit", "export", "manage"] },
 
@@ -104,6 +106,7 @@ export const seedRolePermissions: Record<string, RolePermissionMap> = {
       "employees.directory",
       "employees.documents",
       "organization.structure",
+      "masters.records",
       "attendance.records",
       "recruitment.openings",
       "performance.reviews",
@@ -128,6 +131,7 @@ export const seedRolePermissions: Record<string, RolePermissionMap> = {
     "employees.directory": ["view", "create", "edit", "export"],
     "employees.documents": ["view", "edit"],
     "organization.structure": ["view", "edit"],
+    "masters.records": ["view", "edit"],
     "attendance.records": ["view", "edit", "export"],
     "leave.requests": ["view", "edit", "approve", "reject"],
     "payroll.payslips": ["view"],
@@ -140,6 +144,7 @@ export const seedRolePermissions: Record<string, RolePermissionMap> = {
   "role-payroll-admin": grantActions({
     "dashboard.overview": ["view"],
     "employees.directory": ["view"],
+    "masters.records": ["view", "edit"],
     "payroll.payslips": ["view", "export", "manage"],
     "payroll.salary": ["view", "edit", "manage"],
     "payroll.bank": ["view", "edit", "manage"],
@@ -186,6 +191,7 @@ export const seedRolePermissions: Record<string, RolePermissionMap> = {
   "role-auditor": grantActions({
     "dashboard.overview": ["view"],
     "employees.directory": ["view"],
+    "masters.records": ["view"],
     "attendance.records": ["view"],
     "leave.requests": ["view"],
     "payroll.payslips": ["view"],

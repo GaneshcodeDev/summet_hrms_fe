@@ -4,7 +4,6 @@ import type {
   AttendanceReportRow,
   AttendanceStatus,
   Department,
-  Designation,
   Employee,
   JobOpening,
   LeaveRequest,
@@ -151,18 +150,8 @@ export const departments: Department[] = [
   { id: "5", name: "Operations", code: "OPS", head: "Vikram Desai", employeeCount: 83, status: "Active", siteId: "site-2" },
 ];
 
-export const designations: Designation[] = [
-  { id: "1", name: "CEO", department: "Management", grade: "Grade 10", employeeCount: 1, status: "Active", siteId: "site-1" },
-  { id: "2", name: "CTO", department: "Engineering", grade: "Grade 9", employeeCount: 1, status: "Active", siteId: "site-1" },
-  { id: "3", name: "HR Manager", department: "Human Resources", grade: "Grade 8", employeeCount: 3, status: "Active", siteId: "site-1" },
-  { id: "4", name: "Software Engineer", department: "Engineering", grade: "Grade 6", employeeCount: 84, status: "Active", siteId: "site-1" },
-  { id: "5", name: "HR Executive", department: "Human Resources", grade: "Grade 5", employeeCount: 12, status: "Active", siteId: "site-3" },
-  { id: "6", name: "Finance Manager", department: "Finance", grade: "Grade 8", employeeCount: 4, status: "Active", siteId: "site-1" },
-  { id: "7", name: "DevOps Engineer", department: "Engineering", grade: "Grade 7", employeeCount: 22, status: "Active", siteId: "site-2" },
-  { id: "8", name: "Accountant", department: "Finance", grade: "Grade 4", employeeCount: 16, status: "Active", siteId: "site-3" },
-  { id: "9", name: "Tech Lead", department: "Engineering", grade: "Grade 8", employeeCount: 9, status: "Active", siteId: "site-2" },
-  { id: "10", name: "Recruiter", department: "Human Resources", grade: "Grade 5", employeeCount: 7, status: "Active", siteId: "site-4" },
-];
+// Designation is now a configurable Master (see @/lib/master-data) instead of
+// a hardcoded array, so it can be managed centrally like every other master.
 
 export const leaveHistory: LeaveRequest[] = [
   { id: "1", employee: "Ganesh Pandey", type: "Casual Leave", from: "2024-05-30", to: "2024-05-31", days: 2, status: "Approved", reason: "Personal Work", siteId: "site-1" },

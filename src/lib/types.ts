@@ -64,16 +64,6 @@ export interface Department {
   siteId: string;
 }
 
-export interface Designation {
-  id: string;
-  name: string;
-  department: string;
-  grade: string;
-  employeeCount: number;
-  status: "Active" | "Inactive";
-  siteId: string;
-}
-
 /* ------------------------------------------------------------------ */
 /* Organization structure (Company -> ... -> Profit Center)            */
 /* ------------------------------------------------------------------ */
@@ -122,6 +112,72 @@ export interface OrgAuditEntry {
   orgUnitType: OrgUnitType;
   orgUnitName: string;
   action: OrgAuditAction;
+  actorName: string;
+  detail: string;
+  timestamp: string;
+}
+
+/* ------------------------------------------------------------------ */
+/* Masters — centralized configurable reference data                   */
+/* ------------------------------------------------------------------ */
+
+export const masterTypes = [
+  "Department",
+  "Designation",
+  "JobGrade",
+  "EmploymentType",
+  "EmployeeType",
+  "Location",
+  "Plant",
+  "Shift",
+  "ShiftType",
+  "LeaveType",
+  "HolidayType",
+  "SalaryComponent",
+  "Allowance",
+  "Deduction",
+  "Qualification",
+  "Skill",
+  "DocumentType",
+  "SeparationReason",
+  "RecruitmentSource",
+  "CostCenter",
+  "ProfitCenter",
+  "Bank",
+  "Country",
+  "State",
+  "City",
+] as const;
+
+export type MasterType = (typeof masterTypes)[number];
+
+export type MasterFieldType = "text" | "number" | "boolean" | "select" | "time";
+
+/** A record's extra type-specific attributes, e.g. State.countryId, Shift.startTime. */
+export type MasterAttributes = Record<string, string | number | boolean | undefined>;
+
+export interface MasterRecord {
+  id: string;
+  masterType: MasterType;
+  name: string;
+  code: string;
+  description?: string;
+  status: "Active" | "Inactive";
+  /** Present only for tenant-scoped masters; global masters (Country, Bank, ...) omit it. */
+  siteId?: string;
+  attributes: MasterAttributes;
+  createdOn: string;
+  updatedOn: string;
+}
+
+export type MasterAuditAction = "created" | "updated" | "activated" | "deactivated" | "imported";
+
+export interface MasterAuditEntry {
+  id: string;
+  masterType: MasterType;
+  recordId: string;
+  recordName: string;
+  action: MasterAuditAction;
   actorName: string;
   detail: string;
   timestamp: string;
@@ -233,6 +289,7 @@ export const permissionModules = [
   "Sites",
   "Employees",
   "Organization",
+  "Masters",
   "Attendance",
   "Leave",
   "Payroll",

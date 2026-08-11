@@ -13,6 +13,7 @@ import {
   Settings,
   Building2,
   ShieldCheck,
+  Database,
   type LucideIcon,
 } from "lucide-react";
 import type { PermissionModule } from "@/lib/types";
@@ -29,6 +30,7 @@ export const navItems: NavItem[] = [
   { label: "Dashboard", href: "/dashboard", icon: LayoutDashboard, module: "Dashboard" },
   { label: "Sites", href: "/sites", icon: Building2, module: "Sites" },
   { label: "Organization", href: "/organization", icon: Network, module: "Organization" },
+  { label: "Masters", href: "/masters", icon: Database, module: "Masters" },
   { label: "Employees", href: "/employees", icon: Users, module: "Employees" },
   { label: "Attendance", href: "/attendance", icon: CalendarCheck, module: "Attendance" },
   { label: "Leave", href: "/leave", icon: CalendarDays, module: "Leave" },
