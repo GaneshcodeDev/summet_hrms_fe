@@ -1,7 +1,42 @@
 {
   "permissions": {
     "allow": [
-      "Bash(npx create-next-app@latest . --typescript --tailwind --eslint --app --src-dir --import-alias \"@/*\" --use-npm --turbopack --yes)"
+      "Bash(npx create-next-app@latest . --typescript --tailwind --eslint --app --src-dir --import-alias \"@/*\" --use-npm --turbopack --yes)",
+      "Bash(npm install *)",
+      "Bash(npm run *)",
+      "Bash(git -C /Users/ganeshpandey/Developer/summeet_hrms_fe mv src/middleware.ts src/proxy.ts)",
+      "Bash(mv /Users/ganeshpandey/Developer/summeet_hrms_fe/src/middleware.ts /Users/ganeshpandey/Developer/summeet_hrms_fe/src/proxy.ts)",
+      "Bash(lsof -ti:3000 -sTCP:LISTEN)",
+      "Bash(xargs -r kill)",
+      "Bash(disown)",
+      "Bash(timeout 40 bash -c 'until curl -sf http://localhost:3000 -o /dev/null; do sleep 1; done')",
+      "Bash(npx --yes playwright --version)",
+      "Bash(python3 -c \"import playwright\")",
+      "Bash(npx playwright *)",
+      "Bash(node /private/tmp/claude-501/-Users-ganeshpandey-Developer-summeet-hrms-fe/486ba346-38a5-4de3-ac6c-d2baba3b1c73/scratchpad/screenshot.mjs)",
+      "Bash(node /Users/ganeshpandey/Developer/summeet_hrms_fe/screenshot.mjs)",
+      "Bash(git -C /Users/ganeshpandey/Developer/summeet_hrms_fe status --short)",
+      "Bash(git -C /Users/ganeshpandey/Developer/summeet_hrms_fe log --oneline -5)",
+      "Bash(grep -rn 'href={`/\\\\|href={action.href}\\\\|href={`\\\\|<a$' /Users/ganeshpandey/Developer/summeet_hrms_fe/src --include=\"*.tsx\" -A1)",
+      "Bash(grep -n 'action.href\\\\|<a$\\\\|<a \\\\|</a>' /Users/ganeshpandey/Developer/summeet_hrms_fe/src/app/\\\\\\(app\\\\\\)/dashboard/page.tsx)",
+      "Bash(node screenshot-all.mjs)",
+      "Bash(node screenshot-interact.mjs)",
+      "Bash(npm uninstall *)",
+      "Bash(node screenshot-sites.mjs)",
+      "Read(//Users/ganeshpandey/Library/Caches/ms-playwright/**)",
+      "Read(//tmp/**)",
+      "Bash(curl -s -o /dev/null -w \"%{http_code}\" http://localhost:3000/login)",
+      "Read(//private/tmp/**)",
+      "Bash(curl -s -o /dev/null -w \"%{http_code}\\\\n\" http://localhost:3000/login)",
+      "Bash(node /private/tmp/claude-501/-Users-ganeshpandey-Developer-summeet-hrms-fe/486ba346-38a5-4de3-ac6c-d2baba3b1c73/scratchpad/theme-check.mjs)",
+      "Bash(node theme-check.mjs)",
+      "Bash(curl -s -o /dev/null -w \"%{http_code}\\\\n\" http://localhost:3000/dashboard)",
+      "Bash(node verify.mjs)",
+      "Bash(npx tsc *)",
+      "Bash(npx next *)",
+      "Bash(npx eslint *)",
+      "Bash(node /private/tmp/claude-501/-Users-ganeshpandey-Developer-summeet-hrms-fe/74bd1850-4341-4129-956b-bd9ff9b64b25/scratchpad/verify-rbac.mjs)",
+      "Bash(node verify-rbac.mjs)"
     ]
   }
 }
