@@ -36,7 +36,8 @@
       "Bash(npx next *)",
       "Bash(npx eslint *)",
       "Bash(node /private/tmp/claude-501/-Users-ganeshpandey-Developer-summeet-hrms-fe/74bd1850-4341-4129-956b-bd9ff9b64b25/scratchpad/verify-rbac.mjs)",
-      "Bash(node verify-rbac.mjs)"
+      "Bash(node verify-rbac.mjs)",
+      "Bash(node verify-org.mjs)"
     ]
   }
 }
