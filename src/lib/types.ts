@@ -512,11 +512,14 @@ export const permissionModules = [
   "AccessControl",
   "Sites",
   "Employees",
+  "Onboarding",
+  "Offboarding",
   "Organization",
   "Masters",
   "Attendance",
   "Leave",
   "Payroll",
+  "Expenses",
   "Recruitment",
   "Performance",
   "Training",
@@ -674,4 +677,289 @@ export interface BackupHistoryEntry {
   sizeLabel: string;
   triggeredBy: string;
   type: "Manual" | "Automatic";
+}
+
+/* ------------------------------------------------------------------ */
+/* Onboarding — pre-boarding checklist, documents & e-signature        */
+/* ------------------------------------------------------------------ */
+
+export type OnboardingTaskCategory = "HR" | "IT" | "Admin" | "Manager" | "Employee";
+export type OnboardingTaskStatus = "Pending" | "In Progress" | "Completed" | "Not Applicable";
+
+export interface OnboardingTask {
+  id: string;
+  title: string;
+  category: OnboardingTaskCategory;
+  mandatory: boolean;
+  status: OnboardingTaskStatus;
+  completedBy?: string;
+  completedOn?: string;
+  note?: string;
+}
+
+export type DocumentStatus = "Pending" | "Uploaded" | "Verified" | "Rejected";
+export type SignatureStatus = "Not Required" | "Not Sent" | "Sent" | "Viewed" | "Signed" | "Declined";
+
+export interface OnboardingDocument {
+  id: string;
+  docType: string;
+  status: DocumentStatus;
+  fileName?: string;
+  uploadedOn?: string;
+  verifiedBy?: string;
+  verifiedOn?: string;
+  rejectionReason?: string;
+  signatureStatus: SignatureStatus;
+  signedOn?: string;
+}
+
+export type OnboardingCaseStatus = "Pre-boarding" | "In Progress" | "Completed" | "Cancelled";
+
+export interface OnboardingCase {
+  id: string;
+  candidateName: string;
+  candidateEmail: string;
+  candidatePhone: string;
+  designation: string;
+  department: string;
+  siteId: string;
+  /** Set once the candidate has a real Employee record (usually from day one). */
+  employeeId?: string;
+  buddyId?: string;
+  joiningDate: string;
+  status: OnboardingCaseStatus;
+  tasks: OnboardingTask[];
+  documents: OnboardingDocument[];
+  createdOn: string;
+  completedOn?: string;
+  cancelledReason?: string;
+}
+
+export type OnboardingAuditAction =
+  | "created"
+  | "task_updated"
+  | "document_uploaded"
+  | "document_verified"
+  | "document_rejected"
+  | "signature_sent"
+  | "signature_signed"
+  | "completed"
+  | "cancelled";
+
+export interface OnboardingAuditEntry {
+  id: string;
+  caseId: string;
+  candidateName: string;
+  action: OnboardingAuditAction;
+  actorName: string;
+  detail: string;
+  timestamp: string;
+}
+
+/* ------------------------------------------------------------------ */
+/* Offboarding — resignation/termination, clearance, exit & F&F        */
+/* ------------------------------------------------------------------ */
+
+export type SeparationType = "Resignation" | "Termination" | "Retirement" | "Absconding";
+export type SeparationStatus =
+  | "Pending Approval"
+  | "Approved"
+  | "Clearance In Progress"
+  | "Settlement Pending"
+  | "Completed"
+  | "Rejected"
+  | "Withdrawn";
+
+export type ClearanceDepartment = "IT" | "Admin" | "Finance" | "HR";
+export type ClearanceItemStatus = "Pending" | "Cleared" | "Flagged";
+
+export interface ClearanceItem {
+  id: string;
+  department: ClearanceDepartment;
+  title: string;
+  status: ClearanceItemStatus;
+  clearedBy?: string;
+  clearedOn?: string;
+  remarks?: string;
+}
+
+export type ExitInterviewStatus = "Not Scheduled" | "Scheduled" | "Completed" | "Skipped";
+
+export interface ExitInterview {
+  status: ExitInterviewStatus;
+  scheduledOn?: string;
+  conductedBy?: string;
+  primaryReason?: string;
+  feedbackNotes?: string;
+  wouldRehire?: boolean;
+  rating?: number;
+}
+
+export type FnFLineItemType = "Earning" | "Deduction";
+
+export interface FnFLineItem {
+  id: string;
+  label: string;
+  type: FnFLineItemType;
+  amount: number;
+  autoComputed: boolean;
+}
+
+export type SettlementStatus = "Pending" | "Processing" | "Paid";
+
+export interface FullAndFinalSettlement {
+  lineItems: FnFLineItem[];
+  netPayable: number;
+  status: SettlementStatus;
+  computedOn?: string;
+  paidOn?: string;
+  reference?: string;
+}
+
+export type LetterStatus = "Not Generated" | "Generated" | "Sent";
+
+export interface SeparationCase {
+  id: string;
+  employeeId: string;
+  employee: string;
+  designation: string;
+  department: string;
+  siteId?: string;
+  type: SeparationType;
+  reason: string;
+  resignationDate: string;
+  lastWorkingDay: string;
+  noticePeriodDays: number;
+  status: SeparationStatus;
+  initiatedBy: string;
+  approverId?: string;
+  approverName?: string;
+  decisionReason?: string;
+  decidedOn?: string;
+  clearanceItems: ClearanceItem[];
+  exitInterview: ExitInterview;
+  settlement: FullAndFinalSettlement;
+  relievingLetterStatus: LetterStatus;
+  experienceLetterStatus: LetterStatus;
+  completedOn?: string;
+}
+
+export type OffboardingAuditAction =
+  | "initiated"
+  | "approved"
+  | "rejected"
+  | "withdrawn"
+  | "clearance_updated"
+  | "exit_interview_scheduled"
+  | "exit_interview_completed"
+  | "settlement_computed"
+  | "settlement_paid"
+  | "document_generated"
+  | "completed";
+
+export interface OffboardingAuditEntry {
+  id: string;
+  caseId: string;
+  employeeName: string;
+  action: OffboardingAuditAction;
+  actorName: string;
+  detail: string;
+  timestamp: string;
+}
+
+/* ------------------------------------------------------------------ */
+/* Expense & Travel management                                         */
+/* ------------------------------------------------------------------ */
+
+export type TravelMode = "Flight" | "Train" | "Bus" | "Cab" | "Self";
+export type TravelRequestStatus = "Pending" | "Approved" | "Rejected" | "Completed";
+
+export interface TravelRequest {
+  id: string;
+  employeeId: string;
+  employee: string;
+  purpose: string;
+  destination: string;
+  mode: TravelMode;
+  fromDate: string;
+  toDate: string;
+  estimatedCost: number;
+  status: TravelRequestStatus;
+  siteId?: string;
+  appliedOn: string;
+  approverId?: string;
+  approverName?: string;
+  decisionReason?: string;
+  decidedOn?: string;
+}
+
+export type ExpenseCategory =
+  | "Travel"
+  | "Accommodation"
+  | "Food"
+  | "Fuel"
+  | "Internet & Phone"
+  | "Client Entertainment"
+  | "Other";
+
+export interface ExpenseItem {
+  id: string;
+  date: string;
+  category: ExpenseCategory;
+  amount: number;
+  description: string;
+  hasReceipt: boolean;
+  overLimitNote?: string;
+}
+
+export type ExpenseClaimStatus =
+  | "Draft"
+  | "Submitted"
+  | "Manager Approved"
+  | "Finance Approved"
+  | "Rejected"
+  | "Reimbursed";
+
+export interface ExpenseClaim {
+  id: string;
+  employeeId: string;
+  employee: string;
+  title: string;
+  travelRequestId?: string;
+  items: ExpenseItem[];
+  totalAmount: number;
+  status: ExpenseClaimStatus;
+  siteId?: string;
+  submittedOn?: string;
+  managerId?: string;
+  managerName?: string;
+  managerDecisionReason?: string;
+  managerDecidedOn?: string;
+  financeName?: string;
+  financeDecisionReason?: string;
+  financeDecidedOn?: string;
+  reimbursedOn?: string;
+  reimbursementReference?: string;
+}
+
+export type ExpenseAuditAction =
+  | "created"
+  | "submitted"
+  | "manager_approved"
+  | "manager_rejected"
+  | "finance_approved"
+  | "finance_rejected"
+  | "reimbursed"
+  | "cancelled"
+  | "travel_requested"
+  | "travel_decided";
+
+export interface ExpenseAuditEntry {
+  id: string;
+  refId: string;
+  employeeName: string;
+  action: ExpenseAuditAction;
+  actorName: string;
+  detail: string;
+  timestamp: string;
 }

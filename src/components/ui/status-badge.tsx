@@ -25,6 +25,35 @@ const toneMap: Record<string, BadgeTone> = {
   "Half Day": "amber",
   "On Leave": "sky",
   Holiday: "indigo",
+
+  // Onboarding
+  "Pre-boarding": "indigo",
+  Uploaded: "sky",
+  "Not Sent": "slate",
+  Sent: "sky",
+  Viewed: "sky",
+  Signed: "emerald",
+  Declined: "rose",
+  "Not Required": "slate",
+  "Not Applicable": "slate",
+
+  // Offboarding
+  "Pending Approval": "amber",
+  "Clearance In Progress": "amber",
+  "Settlement Pending": "amber",
+  Withdrawn: "slate",
+  Cleared: "emerald",
+  Flagged: "rose",
+  Processing: "amber",
+  Paid: "emerald",
+  "Not Generated": "slate",
+  Generated: "sky",
+  "Not Scheduled": "slate",
+
+  // Expenses
+  "Manager Approved": "sky",
+  "Finance Approved": "indigo",
+  Reimbursed: "emerald",
 };
 
 export function StatusBadge({ status }: { status: string }) {
