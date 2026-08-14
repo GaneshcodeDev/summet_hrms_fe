@@ -1,31 +1,22 @@
 "use client";
 
-import { FormEvent, useState } from "react";
+import { FormEvent, useMemo, useState } from "react";
 import Link from "next/link";
 import {
   ArrowRight,
   Banknote,
   Check,
+  CheckCircle2,
   Download,
   FileText,
   Landmark,
+  Lock,
   Plus,
   ShieldCheck,
   Users,
   Wallet,
   X,
 } from "lucide-react";
-import {
-  Bar,
-  BarChart,
-  Cell,
-  Pie,
-  PieChart,
-  ResponsiveContainer,
-  Tooltip,
-  XAxis,
-  YAxis,
-} from "recharts";
 import { PageHeader } from "@/components/layout/page-header";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Button } from "@/components/ui/button";
@@ -36,173 +27,578 @@ import { StatusBadge } from "@/components/ui/status-badge";
 import { Tabs } from "@/components/ui/tabs";
 import { EmptyRow, TBody, TableFootnote, Td, Th, THead, Table, Tr } from "@/components/ui/table";
 import { Can } from "@/components/auth/permission-gate";
-import { payrollCostByDept, payrollHistory, payrollSummary } from "@/lib/mock-data";
 import { loanTenureGuide, loanTypes } from "@/lib/payroll-data";
-import { usePayroll } from "@/lib/payroll-context";
+import { usePayroll, type PayrollPreviewRow } from "@/lib/payroll-context";
 import { useMasters } from "@/lib/master-context";
+import { useEmployees } from "@/lib/employee-context";
 import { useAccessControl } from "@/lib/access-control-context";
 import { useSite, useSiteFilter } from "@/lib/site-context";
-import { useTheme } from "@/lib/theme-context";
 import { useToast } from "@/lib/toast-context";
-import type { EmployeeLoan, LoanType, TaxDeclaration, TaxRegime } from "@/lib/types";
-
-const tabs = [
-  { id: "dashboard", label: "Dashboard" },
-  { id: "payslips", label: "Payslips" },
-  { id: "components", label: "Components" },
-  { id: "loans", label: "Loans" },
-  { id: "tax", label: "Tax" },
-  { id: "reports", label: "Reports" },
-];
+import type { EmployeeLoan, SalaryLine, TaxDeclaration, TaxRegime } from "@/lib/types";
 
 const currentFinancialYear = "2024-25";
 
+function currentMonthStr() {
+  return new Date().toISOString().slice(0, 7);
+}
+
+function formatMonth(month: string) {
+  const [y, m] = month.split("-").map(Number);
+  return new Date(y, m - 1, 1).toLocaleDateString("en-IN", { month: "long", year: "numeric" });
+}
+
+function inr(n: number) {
+  return `₹${Math.round(n).toLocaleString("en-IN")}`;
+}
+
 export default function PayrollPage() {
   const [active, setActive] = useState("dashboard");
-  const { resolvedTheme } = useTheme();
-  const toast = useToast();
-  const isDark = resolvedTheme === "dark";
-  const tickColor = isDark ? "#64748b" : "#94a3b8";
-  const tooltipStyle = {
-    borderRadius: 8,
-    border: `1px solid ${isDark ? "#1e293b" : "#e2e8f0"}`,
-    fontSize: 12,
-    backgroundColor: isDark ? "#0f172a" : "#ffffff",
-    color: isDark ? "#e2e8f0" : "#0f172a",
-  };
+  const { canManageSalary, canProcessPayroll } = usePayroll();
 
-  function handleProcessPayroll() {
-    toast.info("Payroll run queued for May 2024 — this is a demo environment, no real payout is processed.");
-  }
+  const tabs = [
+    { id: "dashboard", label: "Dashboard" },
+    ...(canManageSalary ? [{ id: "salary", label: "Salary Structure" }] : []),
+    ...(canProcessPayroll ? [{ id: "run", label: "Payroll Run" }] : []),
+    { id: "payslips", label: "Payslips" },
+    { id: "components", label: "Components" },
+    { id: "loans", label: "Loans" },
+    { id: "tax", label: "Tax" },
+    { id: "reports", label: "Reports" },
+  ];
 
   return (
     <div className="space-y-6">
-      <PageHeader
-        title="Payroll Dashboard"
-        description="Overview of payroll processing and cost distribution"
-        action={
-          <Can feature="payroll.payslips" action="manage">
-            <Button onClick={handleProcessPayroll}>Process Payroll</Button>
-          </Can>
-        }
-      />
-
+      <PageHeader title="Payroll" description="Salary structure, payroll processing and payslips" />
       <Tabs tabs={tabs} active={active} onChange={setActive} />
 
-      {active === "dashboard" && (
-        <div className="space-y-6">
-          <div className="grid grid-cols-1 gap-4 sm:grid-cols-2 xl:grid-cols-4">
-            <StatCard label="Total Employee" value="523" icon={Users} tone="indigo" />
-            <StatCard label="Processed" value="512" icon={Banknote} tone="emerald" />
-            <StatCard label="Pending" value="8" icon={FileText} tone="amber" />
-            <StatCard label="Total Payroll Cost" value="₹1,25,80,000" icon={Landmark} tone="rose" />
-          </div>
-
-          <div className="grid grid-cols-1 gap-6 xl:grid-cols-3">
-            <Card className="xl:col-span-2">
-              <CardHeader>
-                <CardTitle>Payroll Summary</CardTitle>
-                <span className="text-xs text-slate-400 dark:text-slate-500">Last 6 months (₹ Lakhs)</span>
-              </CardHeader>
-              <CardContent className="h-64">
-                <ResponsiveContainer width="100%" height="100%">
-                  <BarChart data={payrollSummary} margin={{ left: 10, right: 20 }}>
-                    <XAxis dataKey="month" axisLine={false} tickLine={false} tick={{ fontSize: 12, fill: tickColor }} />
-                    <YAxis axisLine={false} tickLine={false} tick={{ fontSize: 12, fill: tickColor }} width={30} />
-                    <Tooltip contentStyle={tooltipStyle} />
-                    <Bar dataKey="value" fill="#6366f1" radius={[6, 6, 0, 0]} />
-                  </BarChart>
-                </ResponsiveContainer>
-              </CardContent>
-            </Card>
-
-            <Card>
-              <CardHeader>
-                <CardTitle>Payroll Cost by Department</CardTitle>
-              </CardHeader>
-              <CardContent>
-                <div className="h-36">
-                  <ResponsiveContainer width="100%" height="100%">
-                    <PieChart>
-                      <Pie
-                        data={payrollCostByDept}
-                        dataKey="value"
-                        innerRadius={36}
-                        outerRadius={56}
-                        paddingAngle={2}
-                        strokeWidth={0}
-                      >
-                        {payrollCostByDept.map((entry) => (
-                          <Cell key={entry.name} fill={entry.color} />
-                        ))}
-                      </Pie>
-                    </PieChart>
-                  </ResponsiveContainer>
-                </div>
-                <ul className="mt-2 space-y-1.5">
-                  {payrollCostByDept.map((d) => (
-                    <li key={d.name} className="flex items-center justify-between text-xs">
-                      <span className="flex items-center gap-1.5 text-slate-500 dark:text-slate-400">
-                        <span className="h-2 w-2 rounded-full" style={{ background: d.color }} />
-                        {d.name}
-                      </span>
-                      <span className="font-medium text-slate-700 dark:text-slate-200">{d.value}%</span>
-                    </li>
-                  ))}
-                </ul>
-              </CardContent>
-            </Card>
-          </div>
-
-          <Card>
-            <CardHeader>
-              <CardTitle>Recent Payslips</CardTitle>
-            </CardHeader>
-            <CardContent className="divide-y divide-slate-100 pt-0 dark:divide-slate-800">
-              {payrollHistory.map((p) => (
-                <div key={p.month} className="flex items-center justify-between py-3">
-                  <div>
-                    <p className="text-sm font-medium text-slate-700 dark:text-slate-200">{p.month}</p>
-                    <p className="text-xs text-slate-400 dark:text-slate-500">{p.status}</p>
-                  </div>
-                  <div className="flex items-center gap-3">
-                    <Link href="/payroll/payslip" className="text-sm font-medium text-indigo-600 hover:underline dark:text-indigo-400">
-                      View
-                    </Link>
-                    <button className="flex items-center gap-1 text-sm font-medium text-slate-500 hover:text-slate-700 dark:text-slate-400 dark:hover:text-slate-200">
-                      <Download className="h-3.5 w-3.5" /> Download
-                    </button>
-                  </div>
-                </div>
-              ))}
-            </CardContent>
-          </Card>
-        </div>
-      )}
-
-      {active === "payslips" && (
-        <Card className="divide-y divide-slate-100 dark:divide-slate-800">
-          {payrollHistory.map((p) => (
-            <div key={p.month} className="flex items-center justify-between px-5 py-4">
-              <div>
-                <p className="text-sm font-medium text-slate-700 dark:text-slate-200">Payslip — {p.month}</p>
-                <p className="text-xs text-slate-400 dark:text-slate-500">{p.status}</p>
-              </div>
-              <Link href="/payroll/payslip">
-                <Button size="sm" variant="secondary">
-                  View Payslip
-                </Button>
-              </Link>
-            </div>
-          ))}
-        </Card>
-      )}
-
+      {active === "dashboard" && <DashboardTab />}
+      {active === "salary" && canManageSalary && <SalaryStructureTab />}
+      {active === "run" && canProcessPayroll && <PayrollRunTab />}
+      {active === "payslips" && <PayslipsTab />}
       {active === "components" && <ComponentsTab />}
       {active === "loans" && <LoansTab />}
       {active === "tax" && <TaxTab />}
       {active === "reports" && <ReportsTab />}
     </div>
+  );
+}
+
+function DashboardTab() {
+  const { currentSite, currentSiteId, isAllSites } = useSite();
+  const { employees } = useEmployees();
+  const { runsForSite, payslipsForRun, salaryStructures } = usePayroll();
+
+  if (isAllSites || !currentSiteId) {
+    return (
+      <Card className="p-10 text-center text-sm text-slate-400 dark:text-slate-500">
+        Select a site from the switcher above to view its payroll.
+      </Card>
+    );
+  }
+
+  const siteEmployees = employees.filter((e) => e.siteId === currentSiteId);
+  const runs = runsForSite(currentSiteId).slice().sort((a, b) => (a.month < b.month ? 1 : -1));
+  const latestRun = runs[0];
+  const configuredCount = salaryStructures.filter((s) => s.siteId === currentSiteId).length;
+
+  if (siteEmployees.length === 0) {
+    return (
+      <div className="space-y-6">
+        <div className="grid grid-cols-1 gap-4 sm:grid-cols-2 xl:grid-cols-4">
+          <StatCard label="Total Employees" value="0" icon={Users} tone="indigo" />
+          <StatCard label="Salary Configured" value="0" icon={Banknote} tone="emerald" />
+          <StatCard label="Pending" value="0" icon={FileText} tone="amber" />
+          <StatCard label="Total Payroll Cost" value="Not Processed" icon={Landmark} tone="rose" />
+        </div>
+        <Card className="p-8 text-center text-sm text-slate-400 dark:text-slate-500">
+          No employees at {currentSite?.name} yet — add employees before running payroll.
+        </Card>
+      </div>
+    );
+  }
+
+  if (!latestRun) {
+    return (
+      <div className="space-y-6">
+        <div className="grid grid-cols-1 gap-4 sm:grid-cols-2 xl:grid-cols-4">
+          <StatCard label="Total Employees" value={String(siteEmployees.length)} icon={Users} tone="indigo" />
+          <StatCard label="Salary Configured" value={String(configuredCount)} icon={Banknote} tone="emerald" />
+          <StatCard label="Pending" value={String(siteEmployees.length)} icon={FileText} tone="amber" />
+          <StatCard label="Total Payroll Cost" value="Not Processed" icon={Landmark} tone="rose" />
+        </div>
+        <Card className="flex flex-col items-center gap-3 p-8 text-center">
+          <p className="text-sm text-slate-500 dark:text-slate-400">Payroll has not been processed yet.</p>
+          <Link href="/payroll?tab=run">
+            <Button size="sm">Go to Payroll Run</Button>
+          </Link>
+        </Card>
+      </div>
+    );
+  }
+
+  const latestPayslips = payslipsForRun(latestRun.id);
+
+  return (
+    <div className="space-y-6">
+      <div className="grid grid-cols-1 gap-4 sm:grid-cols-2 xl:grid-cols-4">
+        <StatCard label="Total Employees" value={String(siteEmployees.length)} icon={Users} tone="indigo" />
+        <StatCard label="Processed" value={String(latestRun.employeeCount)} icon={Banknote} tone="emerald" />
+        <StatCard label="Pending" value={String(Math.max(0, siteEmployees.length - latestRun.employeeCount))} icon={FileText} tone="amber" />
+        <StatCard label="Total Payroll Cost" value={inr(latestRun.totalNet)} icon={Landmark} tone="rose" />
+      </div>
+
+      <Card>
+        <CardHeader>
+          <CardTitle>Latest Run — {formatMonth(latestRun.month)}</CardTitle>
+          <StatusBadge status={latestRun.status} />
+        </CardHeader>
+        <CardContent className="grid grid-cols-2 gap-4 pt-0 sm:grid-cols-4">
+          <div>
+            <p className="text-xs text-slate-400 dark:text-slate-500">Gross</p>
+            <p className="font-semibold text-slate-800 dark:text-slate-100">{inr(latestRun.totalGross)}</p>
+          </div>
+          <div>
+            <p className="text-xs text-slate-400 dark:text-slate-500">Deductions</p>
+            <p className="font-semibold text-slate-800 dark:text-slate-100">{inr(latestRun.totalDeductions)}</p>
+          </div>
+          <div>
+            <p className="text-xs text-slate-400 dark:text-slate-500">Net</p>
+            <p className="font-semibold text-slate-800 dark:text-slate-100">{inr(latestRun.totalNet)}</p>
+          </div>
+          <div>
+            <p className="text-xs text-slate-400 dark:text-slate-500">Payslips</p>
+            <p className="font-semibold text-slate-800 dark:text-slate-100">{latestPayslips.length}</p>
+          </div>
+        </CardContent>
+      </Card>
+
+      <Card>
+        <CardHeader>
+          <CardTitle>Recent Runs</CardTitle>
+        </CardHeader>
+        <CardContent className="divide-y divide-slate-100 pt-0 dark:divide-slate-800">
+          {runs.map((r) => (
+            <div key={r.id} className="flex items-center justify-between py-3">
+              <div>
+                <p className="text-sm font-medium text-slate-700 dark:text-slate-200">{formatMonth(r.month)}</p>
+                <p className="text-xs text-slate-400 dark:text-slate-500">
+                  {r.employeeCount} payslip(s) &middot; {inr(r.totalNet)}
+                </p>
+              </div>
+              <StatusBadge status={r.status} />
+            </div>
+          ))}
+        </CardContent>
+      </Card>
+    </div>
+  );
+}
+
+function SalaryStructureTab() {
+  const { currentSite, currentSiteId, isAllSites } = useSite();
+  const { employees } = useEmployees();
+  const { salaryStructureFor, defaultSalaryLinesFor, saveSalaryStructure } = usePayroll();
+  const toast = useToast();
+  const [editTarget, setEditTarget] = useState<{ employeeId: string; name: string } | null>(null);
+  const [ctcDraft, setCtcDraft] = useState(0);
+  const [earningsDraft, setEarningsDraft] = useState<SalaryLine[]>([]);
+  const [deductionsDraft, setDeductionsDraft] = useState<SalaryLine[]>([]);
+
+  if (isAllSites || !currentSiteId) {
+    return (
+      <Card className="p-10 text-center text-sm text-slate-400 dark:text-slate-500">
+        Select a site from the switcher above to manage salary structures.
+      </Card>
+    );
+  }
+
+  const siteEmployees = employees.filter((e) => e.siteId === currentSiteId);
+
+  function openEditor(employeeId: string, name: string) {
+    const existing = salaryStructureFor(employeeId);
+    const ctc = existing?.ctcAnnual ?? 0;
+    setCtcDraft(ctc);
+    if (existing) {
+      setEarningsDraft(existing.earnings);
+      setDeductionsDraft(existing.deductions);
+    } else {
+      setEarningsDraft([]);
+      setDeductionsDraft([]);
+    }
+    setEditTarget({ employeeId, name });
+  }
+
+  function regenerateFromCtc(ctc: number) {
+    if (!currentSiteId || ctc <= 0) return;
+    const { earnings, deductions } = defaultSalaryLinesFor(currentSiteId, ctc);
+    setEarningsDraft(earnings);
+    setDeductionsDraft(deductions);
+  }
+
+  function handleSave(e: FormEvent<HTMLFormElement>) {
+    e.preventDefault();
+    if (!editTarget || !currentSiteId) return;
+    const result = saveSalaryStructure({
+      employeeId: editTarget.employeeId,
+      siteId: currentSiteId,
+      ctcAnnual: ctcDraft,
+      earnings: earningsDraft,
+      deductions: deductionsDraft,
+    });
+    (result.ok ? toast.success : toast.error)(result.message);
+    if (result.ok) setEditTarget(null);
+  }
+
+  return (
+    <div className="space-y-4">
+      <p className="text-sm text-slate-500 dark:text-slate-400">Salary structures at {currentSite?.name}</p>
+      <Card>
+        <Table>
+          <THead>
+            <Th>Employee</Th>
+            <Th>Designation</Th>
+            <Th>Annual CTC</Th>
+            <Th>Monthly Gross</Th>
+            <Th>Actions</Th>
+          </THead>
+          <TBody>
+            {siteEmployees.map((e) => {
+              const structure = salaryStructureFor(e.employeeId);
+              return (
+                <Tr key={e.id}>
+                  <Td className="font-medium text-slate-800 dark:text-slate-100">{e.name}</Td>
+                  <Td>{e.designation}</Td>
+                  <Td>{structure ? inr(structure.ctcAnnual) : <span className="text-xs text-slate-400 dark:text-slate-500">Not configured</span>}</Td>
+                  <Td>{structure ? inr(structure.grossMonthly) : "—"}</Td>
+                  <Td>
+                    <button
+                      onClick={() => openEditor(e.employeeId, e.name)}
+                      className="text-sm font-medium text-indigo-600 hover:underline dark:text-indigo-400"
+                    >
+                      {structure ? "Edit" : "Assign"}
+                    </button>
+                  </Td>
+                </Tr>
+              );
+            })}
+            {siteEmployees.length === 0 && <EmptyRow colSpan={5}>No employees at this site yet.</EmptyRow>}
+          </TBody>
+        </Table>
+      </Card>
+
+      <Modal open={Boolean(editTarget)} onClose={() => setEditTarget(null)} title={`Salary Structure — ${editTarget?.name ?? ""}`}>
+        <form className="space-y-4" onSubmit={handleSave}>
+          <Field label="Annual CTC (₹)">
+            <Input
+              type="number"
+              min={0}
+              step={1000}
+              value={ctcDraft || ""}
+              onChange={(e) => setCtcDraft(Number(e.target.value))}
+              onBlur={() => regenerateFromCtc(ctcDraft)}
+              placeholder="e.g. 600000"
+            />
+          </Field>
+          <p className="text-xs text-slate-400 dark:text-slate-500">
+            Tab out of the CTC field to auto-split it into components below (using this site&apos;s configured rates in
+            Masters, or sensible defaults). Every line is editable before saving.
+          </p>
+
+          {earningsDraft.length > 0 && (
+            <div className="grid grid-cols-1 gap-4 sm:grid-cols-2">
+              <div>
+                <p className="mb-2 text-xs font-semibold uppercase tracking-wide text-slate-400 dark:text-slate-500">Earnings (monthly)</p>
+                <div className="space-y-2">
+                  {earningsDraft.map((line, i) => (
+                    <div key={line.componentId} className="flex items-center gap-2">
+                      <span className="flex-1 text-sm text-slate-600 dark:text-slate-300">{line.label}</span>
+                      <Input
+                        type="number"
+                        min={0}
+                        value={line.amount}
+                        onChange={(e) =>
+                          setEarningsDraft((prev) => prev.map((l, idx) => (idx === i ? { ...l, amount: Number(e.target.value) } : l)))
+                        }
+                        className="w-28"
+                      />
+                    </div>
+                  ))}
+                </div>
+              </div>
+              <div>
+                <p className="mb-2 text-xs font-semibold uppercase tracking-wide text-slate-400 dark:text-slate-500">Deductions (monthly)</p>
+                <div className="space-y-2">
+                  {deductionsDraft.map((line, i) => (
+                    <div key={line.componentId} className="flex items-center gap-2">
+                      <span className="flex-1 text-sm text-slate-600 dark:text-slate-300">{line.label}</span>
+                      <Input
+                        type="number"
+                        min={0}
+                        value={line.amount}
+                        onChange={(e) =>
+                          setDeductionsDraft((prev) => prev.map((l, idx) => (idx === i ? { ...l, amount: Number(e.target.value) } : l)))
+                        }
+                        className="w-28"
+                      />
+                    </div>
+                  ))}
+                </div>
+              </div>
+            </div>
+          )}
+
+          <div className="flex justify-end gap-2 pt-2">
+            <Button type="button" variant="outline" onClick={() => setEditTarget(null)}>
+              Cancel
+            </Button>
+            <Button type="submit" disabled={earningsDraft.length === 0}>
+              Save Salary Structure
+            </Button>
+          </div>
+        </form>
+      </Modal>
+    </div>
+  );
+}
+
+function PayrollRunTab() {
+  const { currentSite, currentSiteId, isAllSites } = useSite();
+  const { runForMonth, previewPayrollRun, processPayrollRun, approvePayrollRun, lockPayrollRun, payslipsForRun } = usePayroll();
+  const toast = useToast();
+  const [month, setMonth] = useState(currentMonthStr());
+  const [preview, setPreview] = useState<PayrollPreviewRow[] | null>(null);
+
+  if (isAllSites || !currentSiteId) {
+    return (
+      <Card className="p-10 text-center text-sm text-slate-400 dark:text-slate-500">
+        Select a site from the switcher above to run its payroll.
+      </Card>
+    );
+  }
+
+  const existingRun = runForMonth(currentSiteId, month);
+
+  function handlePreview() {
+    setPreview(previewPayrollRun(currentSiteId!, month));
+  }
+
+  function handleProcess() {
+    const result = processPayrollRun(currentSiteId!, month);
+    (result.ok ? toast.success : toast.error)(result.message);
+    if (result.ok) setPreview(null);
+  }
+
+  function handleApprove(id: string) {
+    const result = approvePayrollRun(id);
+    (result.ok ? toast.success : toast.error)(result.message);
+  }
+
+  function handleLock(id: string) {
+    const result = lockPayrollRun(id);
+    (result.ok ? toast.success : toast.error)(result.message);
+  }
+
+  const runPayslips = existingRun ? payslipsForRun(existingRun.id) : [];
+  const eligibleCount = preview?.filter((r) => r.hasSalaryStructure).length ?? 0;
+  const skippedCount = preview?.filter((r) => !r.hasSalaryStructure).length ?? 0;
+
+  return (
+    <div className="space-y-4">
+      <Card>
+        <CardHeader>
+          <CardTitle>Process Payroll — {currentSite?.name}</CardTitle>
+        </CardHeader>
+        <CardContent className="space-y-4 pt-0">
+          <div className="flex flex-wrap items-end gap-3">
+            <Field label="Month">
+              <Input type="month" value={month} onChange={(e) => { setMonth(e.target.value); setPreview(null); }} className="w-auto" />
+            </Field>
+            {!existingRun && (
+              <Button variant="outline" onClick={handlePreview}>
+                Preview
+              </Button>
+            )}
+            {!existingRun && preview && (
+              <Button onClick={handleProcess} disabled={eligibleCount === 0}>
+                Process Payroll ({eligibleCount})
+              </Button>
+            )}
+          </div>
+
+          {existingRun && (
+            <div className="flex flex-wrap items-center gap-3 rounded-lg border border-slate-100 p-4 dark:border-slate-800">
+              <StatusBadge status={existingRun.status} />
+              <span className="text-sm text-slate-600 dark:text-slate-300">
+                {existingRun.employeeCount} payslip(s) &middot; {inr(existingRun.totalNet)} net
+              </span>
+              <div className="ml-auto flex gap-2">
+                {existingRun.status === "Processing" && (
+                  <Button size="sm" onClick={() => handleApprove(existingRun.id)}>
+                    <CheckCircle2 className="h-4 w-4" /> Approve
+                  </Button>
+                )}
+                {existingRun.status === "Approved" && (
+                  <Button size="sm" onClick={() => handleLock(existingRun.id)}>
+                    <Lock className="h-4 w-4" /> Lock
+                  </Button>
+                )}
+                {existingRun.status === "Locked" && (
+                  <span className="flex items-center gap-1 text-xs text-slate-400 dark:text-slate-500">
+                    <Lock className="h-3.5 w-3.5" /> Locked — no further changes.
+                  </span>
+                )}
+              </div>
+            </div>
+          )}
+
+          {preview && !existingRun && (
+            <div className="space-y-2">
+              <p className="text-xs text-slate-400 dark:text-slate-500">
+                {eligibleCount} employee(s) ready &middot; {skippedCount} skipped (no salary structure configured)
+              </p>
+              <Table>
+                <THead>
+                  <Th>Employee</Th>
+                  <Th>Working Days</Th>
+                  <Th>LOP Days</Th>
+                  <Th>Overtime (hrs)</Th>
+                  <Th>Gross</Th>
+                  <Th>Deductions</Th>
+                  <Th>Net Pay</Th>
+                </THead>
+                <TBody>
+                  {preview.map((row) => (
+                    <Tr key={row.employeeId}>
+                      <Td className="font-medium text-slate-800 dark:text-slate-100">{row.employeeName}</Td>
+                      {row.hasSalaryStructure && row.result ? (
+                        <>
+                          <Td>{row.result.workingDays}</Td>
+                          <Td>{row.result.lopDays}</Td>
+                          <Td>{row.result.overtimeHours}</Td>
+                          <Td>{inr(row.result.grossEarnings)}</Td>
+                          <Td>{inr(row.result.totalDeductions)}</Td>
+                          <Td className="font-semibold">{inr(row.result.netPay)}</Td>
+                        </>
+                      ) : (
+                        <Td colSpan={6} className="text-xs text-slate-400 dark:text-slate-500">
+                          No salary structure configured — skipped
+                        </Td>
+                      )}
+                    </Tr>
+                  ))}
+                </TBody>
+              </Table>
+            </div>
+          )}
+
+          {existingRun && runPayslips.length > 0 && (
+            <Table>
+              <THead>
+                <Th>Employee</Th>
+                <Th>Working Days</Th>
+                <Th>LOP Days</Th>
+                <Th>Overtime (hrs)</Th>
+                <Th>Gross</Th>
+                <Th>Deductions</Th>
+                <Th>Net Pay</Th>
+              </THead>
+              <TBody>
+                {runPayslips.map((p) => (
+                  <Tr key={p.id}>
+                    <Td className="font-medium text-slate-800 dark:text-slate-100">{p.employeeId}</Td>
+                    <Td>{p.workingDays}</Td>
+                    <Td>{p.lopDays}</Td>
+                    <Td>{p.overtimeHours}</Td>
+                    <Td>{inr(p.grossEarnings)}</Td>
+                    <Td>{inr(p.totalDeductions)}</Td>
+                    <Td className="font-semibold">{inr(p.netPay)}</Td>
+                  </Tr>
+                ))}
+              </TBody>
+            </Table>
+          )}
+        </CardContent>
+      </Card>
+    </div>
+  );
+}
+
+function PayslipsTab() {
+  const { currentUser, canFeature } = useAccessControl();
+  const { isAllSites } = useSite();
+  const { payslips, payslipsForEmployee, runForMonth } = usePayroll();
+  const { employees } = useEmployees();
+
+  const canViewAll = canFeature("payroll.payslips", "manage") || canFeature("payroll.payslips", "export");
+  const siteFilteredPayslips = useSiteFilter(payslips);
+
+  if (canViewAll) {
+    const sitePayslips = siteFilteredPayslips.filter((p) => {
+      const run = runForMonth(p.siteId, p.month);
+      return run && run.status !== "Processing";
+    });
+    return (
+      <Card>
+        <Table>
+          <THead>
+            <Th>Employee</Th>
+            <Th>Month</Th>
+            <Th>Gross</Th>
+            <Th>Deductions</Th>
+            <Th>Net Pay</Th>
+            <Th>Actions</Th>
+          </THead>
+          <TBody>
+            {sitePayslips.map((p) => {
+              const emp = employees.find((e) => e.employeeId === p.employeeId);
+              return (
+                <Tr key={p.id}>
+                  <Td className="font-medium text-slate-800 dark:text-slate-100">{emp?.name ?? p.employeeId}</Td>
+                  <Td>{formatMonth(p.month)}</Td>
+                  <Td>{inr(p.grossEarnings)}</Td>
+                  <Td>{inr(p.totalDeductions)}</Td>
+                  <Td className="font-semibold">{inr(p.netPay)}</Td>
+                  <Td>
+                    <Link href={`/payroll/payslip?id=${p.id}`} className="text-sm font-medium text-indigo-600 hover:underline dark:text-indigo-400">
+                      View
+                    </Link>
+                  </Td>
+                </Tr>
+              );
+            })}
+            {sitePayslips.length === 0 && <EmptyRow colSpan={6}>No payslips generated yet for {isAllSites ? "any site" : "this site"}.</EmptyRow>}
+          </TBody>
+        </Table>
+      </Card>
+    );
+  }
+
+  const myPayslips = payslipsForEmployee(currentUser.employeeId).filter((p) => {
+    const run = runForMonth(p.siteId, p.month);
+    return run && run.status !== "Processing";
+  });
+
+  return (
+    <Card className="divide-y divide-slate-100 dark:divide-slate-800">
+      {myPayslips.map((p) => (
+        <div key={p.id} className="flex items-center justify-between px-5 py-4">
+          <div>
+            <p className="text-sm font-medium text-slate-700 dark:text-slate-200">Payslip — {formatMonth(p.month)}</p>
+            <p className="text-xs text-slate-400 dark:text-slate-500">Net Pay: {inr(p.netPay)}</p>
+          </div>
+          <Link href={`/payroll/payslip?id=${p.id}`}>
+            <Button size="sm" variant="secondary">
+              View Payslip
+            </Button>
+          </Link>
+        </div>
+      ))}
+      {myPayslips.length === 0 && (
+        <div className="p-8 text-center text-sm text-slate-400 dark:text-slate-500">
+          Payroll has not been processed yet.
+        </div>
+      )}
+    </Card>
   );
 }
 
@@ -284,7 +680,7 @@ function LoansTab() {
     e.preventDefault();
     const form = new FormData(e.currentTarget);
     const result = applyLoan({
-      type: String(form.get("type")) as LoanType,
+      type: String(form.get("type")) as EmployeeLoan["type"],
       principalAmount: Number(form.get("principalAmount")),
       tenureMonths: Number(form.get("tenureMonths")),
       reason: String(form.get("reason") ?? ""),
@@ -622,18 +1018,32 @@ function TaxTab() {
 }
 
 function ReportsTab() {
-  const { isAllSites, currentSite } = useSite();
-  const { visibleLoans } = usePayroll();
+  const { isAllSites, currentSite, currentSiteId } = useSite();
+  const { visibleLoans, runsForSite, payslipsForRun } = usePayroll();
+  const { employees } = useEmployees();
   const toast = useToast();
   const activeLoanExposure = visibleLoans()
     .filter((l) => l.status === "Active")
     .reduce((sum, l) => sum + l.outstandingAmount, 0);
 
+  const latestRun = currentSiteId ? runsForSite(currentSiteId).slice().sort((a, b) => (a.month < b.month ? 1 : -1))[0] : undefined;
+  const latestPayslips = latestRun ? payslipsForRun(latestRun.id) : [];
+
+  const costByDept = useMemo(() => {
+    const totals = new Map<string, number>();
+    for (const p of latestPayslips) {
+      const emp = employees.find((e) => e.employeeId === p.employeeId);
+      const dept = emp?.department || "Unassigned";
+      totals.set(dept, (totals.get(dept) ?? 0) + p.netPay);
+    }
+    const grandTotal = Array.from(totals.values()).reduce((s, v) => s + v, 0);
+    return Array.from(totals.entries())
+      .map(([name, total]) => ({ name, total, pct: grandTotal > 0 ? Math.round((total / grandTotal) * 100) : 0 }))
+      .sort((a, b) => b.total - a.total);
+  }, [latestPayslips, employees]);
+
   function handleExport() {
-    const rows = [
-      ["Department", "Cost Share (%)"],
-      ...payrollCostByDept.map((d) => [d.name, String(d.value)]),
-    ];
+    const rows = [["Department", "Net Payroll Cost"], ...costByDept.map((d) => [d.name, String(d.total)])];
     const csv = rows.map((r) => r.join(",")).join("\n");
     const blob = new Blob([csv], { type: "text/csv" });
     const url = URL.createObjectURL(blob);
@@ -648,13 +1058,8 @@ function ReportsTab() {
   return (
     <div className="space-y-6">
       <div className="grid grid-cols-1 gap-4 sm:grid-cols-3">
-        <StatCard label="Total Payroll Cost" value="₹1,25,80,000" icon={Landmark} tone="indigo" trend="This month" />
-        <StatCard
-          label="Outstanding Loan Exposure"
-          value={`₹${activeLoanExposure.toLocaleString("en-IN")}`}
-          icon={Wallet}
-          tone="amber"
-        />
+        <StatCard label="Total Payroll Cost" value={latestRun ? inr(latestRun.totalNet) : "Not Processed"} icon={Landmark} tone="indigo" trend={latestRun ? formatMonth(latestRun.month) : undefined} />
+        <StatCard label="Outstanding Loan Exposure" value={inr(activeLoanExposure)} icon={Wallet} tone="amber" />
         <StatCard label="Scope" value={isAllSites ? "All Sites" : currentSite?.name ?? "—"} icon={Users} tone="emerald" />
       </div>
 
@@ -671,15 +1076,18 @@ function ReportsTab() {
           <Table>
             <THead>
               <Th>Department</Th>
-              <Th>Cost Share</Th>
+              <Th>Net Cost</Th>
+              <Th>Share</Th>
             </THead>
             <TBody>
-              {payrollCostByDept.map((d) => (
+              {costByDept.map((d) => (
                 <Tr key={d.name}>
                   <Td className="font-medium text-slate-800 dark:text-slate-100">{d.name}</Td>
-                  <Td>{d.value}%</Td>
+                  <Td>{inr(d.total)}</Td>
+                  <Td>{d.pct}%</Td>
                 </Tr>
               ))}
+              {costByDept.length === 0 && <EmptyRow colSpan={3}>No processed payroll to report on yet.</EmptyRow>}
             </TBody>
           </Table>
         </CardContent>

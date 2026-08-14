@@ -62,7 +62,17 @@ export const seedLeaveRequests: LeaveRequest[] = [
 
   // Manoj Gupta (EMP010) reports to Amit — approved
   { id: "lv-15", employeeId: "EMP010", employee: "Manoj Gupta", type: "Comp Off", from: "2024-04-29", to: "2024-04-29", days: 1, status: "Approved", reason: "Worked on holiday", siteId: "site-1", appliedOn: "2024-04-25", approverId: "EMP007", approverName: "Amit Kumar", decidedOn: "2024-04-26" },
+
+  // Half-day and cancelled examples, so those states show up in demo data too.
+  { id: "lv-16", employeeId: "EMP003", employee: "Priya Singh", type: "Casual Leave", from: "2024-05-06", to: "2024-05-06", halfDay: "Second Half", days: 0.5, status: "Approved", reason: "Doctor's appointment", siteId: "site-2", appliedOn: "2024-05-05", approverId: "EMP002", approverName: "Rohit Sharma", decidedOn: "2024-05-05" },
+  { id: "lv-17", employeeId: "EMP006", employee: "Vikram Desai", type: "Casual Leave", from: "2024-07-15", to: "2024-07-16", days: 2, status: "Cancelled", reason: "Family visit", siteId: "site-2", appliedOn: "2024-07-01", cancelledBy: "Vikram Desai", cancelledOn: "2024-07-08", cancellationReason: "Plans changed" },
 ];
+
+const auditActionFor: Record<Exclude<LeaveRequest["status"], "Pending">, LeaveAuditEntry["action"]> = {
+  Approved: "approved",
+  Rejected: "rejected",
+  Cancelled: "cancelled",
+};
 
 export const seedLeaveAuditEntries: LeaveAuditEntry[] = seedLeaveRequests
   .filter((r) => r.status !== "Pending")
@@ -70,11 +80,13 @@ export const seedLeaveAuditEntries: LeaveAuditEntry[] = seedLeaveRequests
     id: `leave-evt-seed-${r.id}`,
     leaveRequestId: r.id,
     employeeName: r.employee,
-    action: r.status === "Approved" ? "approved" : "rejected",
-    actorName: r.approverName ?? "System",
+    action: auditActionFor[r.status as Exclude<LeaveRequest["status"], "Pending">],
+    actorName: r.status === "Cancelled" ? (r.cancelledBy ?? "System") : (r.approverName ?? "System"),
     detail:
       r.status === "Approved"
         ? `${r.type} approved for ${r.days} day(s)`
-        : `${r.type} rejected — ${r.decisionReason ?? "no reason recorded"}`,
-    timestamp: r.decidedOn ?? r.appliedOn,
+        : r.status === "Cancelled"
+          ? `${r.type} request cancelled${r.cancellationReason ? ` — ${r.cancellationReason}` : ""}`
+          : `${r.type} rejected — ${r.decisionReason ?? "no reason recorded"}`,
+    timestamp: r.status === "Cancelled" ? (r.cancelledOn ?? r.appliedOn) : (r.decidedOn ?? r.appliedOn),
   }));

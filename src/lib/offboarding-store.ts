@@ -1,11 +1,11 @@
 "use client";
 
 import { createLocalStorageStore } from "@/lib/local-store";
-import { seedOffboardingAudit, seedSeparationCases } from "@/lib/offboarding-data";
 import type { OffboardingAuditEntry, SeparationCase } from "@/lib/types";
 
-export const separationCasesStore = createLocalStorageStore<SeparationCase[]>("hrms_separation_cases", seedSeparationCases);
-export const offboardingAuditStore = createLocalStorageStore<OffboardingAuditEntry[]>("hrms_offboarding_audit", seedOffboardingAudit);
+// Real product starts with zero separation cases — see demo-seed.ts for the optional rich dataset.
+export const separationCasesStore = createLocalStorageStore<SeparationCase[]>("hrms_separation_cases", []);
+export const offboardingAuditStore = createLocalStorageStore<OffboardingAuditEntry[]>("hrms_offboarding_audit", []);
 
 export function logOffboardingAudit(entry: Omit<OffboardingAuditEntry, "id" | "timestamp">) {
   const record: OffboardingAuditEntry = {

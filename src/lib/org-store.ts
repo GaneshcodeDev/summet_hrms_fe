@@ -1,7 +1,6 @@
 "use client";
 
 import { createLocalStorageStore } from "@/lib/local-store";
-import { seedOrgAuditEntries, seedOrgUnits } from "@/lib/org-data";
 import type { OrgAuditEntry, OrgStructureConfig, OrgUnit } from "@/lib/types";
 
 /**
@@ -9,8 +8,9 @@ import type { OrgAuditEntry, OrgStructureConfig, OrgUnit } from "@/lib/types";
  * rbac-store.ts. Kept outside the context so any part of the app (or a future
  * server sync layer) can read/write without needing a provider mounted.
  */
-export const orgUnitsStore = createLocalStorageStore<OrgUnit[]>("hrms_org_units", seedOrgUnits);
-export const orgAuditStore = createLocalStorageStore<OrgAuditEntry[]>("hrms_org_audit", seedOrgAuditEntries);
+// Real product starts with zero org units — see demo-seed.ts for the optional rich dataset.
+export const orgUnitsStore = createLocalStorageStore<OrgUnit[]>("hrms_org_units", []);
+export const orgAuditStore = createLocalStorageStore<OrgAuditEntry[]>("hrms_org_audit", []);
 
 /** siteId -> which org structure levels that tenant has enabled. */
 export const orgStructureConfigStore = createLocalStorageStore<Record<string, OrgStructureConfig>>(

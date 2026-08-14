@@ -101,6 +101,7 @@ const ALL_FEATURE_IDS = featureCatalog.map((f) => f.id);
 
 export const seedRoles: Role[] = [
   { id: "role-super-admin", name: "Super Admin", description: "Full platform access across every tenant site.", isSystem: true, status: "Active", createdOn: "2018-01-10" },
+  { id: "role-site-admin", name: "Site Admin", description: "Full administrative access within their own site only — cannot see or switch to other sites.", isSystem: true, status: "Active", createdOn: "2018-01-10" },
   { id: "role-hr-admin", name: "HR Admin", description: "Manages HR configuration, employees and access across the org.", isSystem: true, status: "Active", createdOn: "2018-01-10" },
   { id: "role-hr-manager", name: "HR Manager", description: "Runs day-to-day HR operations: employees, attendance, leave, recruitment.", isSystem: true, status: "Active", createdOn: "2018-01-10" },
   { id: "role-payroll-admin", name: "Payroll Admin", description: "Owns payroll processing and payslip distribution.", isSystem: true, status: "Active", createdOn: "2018-01-10" },
@@ -113,6 +114,43 @@ export const seedRoles: Role[] = [
 
 export const seedRolePermissions: Record<string, RolePermissionMap> = {
   "role-super-admin": grant(...ALL_FEATURE_IDS),
+
+  // Full control within their own site — everything Super Admin has except
+  // platform-wide concerns (Sites/tenant management, role & permission
+  // definitions, global org settings). Site scoping itself is enforced by
+  // the Site Context data layer, not by this permission map.
+  "role-site-admin": {
+    ...grant(
+      "employees.directory",
+      "employees.documents",
+      "organization.structure",
+      "organization.site-mapping",
+      "masters.records",
+      "attendance.records",
+      "leave.requests",
+      "payroll.payslips",
+      "payroll.salary",
+      "payroll.bank",
+      "payroll.loans",
+      "payroll.tax",
+      "onboarding.cases",
+      "offboarding.cases",
+      "recruitment.openings",
+      "performance.reviews",
+      "training.programs",
+      "assets.inventory",
+      "expenses.claims",
+      "expenses.travel",
+      "access-control.users",
+      "events.calendar",
+    ),
+    ...grantActions({
+      "dashboard.overview": ["view"],
+      "reports.analytics": ["view", "export"],
+      "access-control.menu": ["view"],
+      "access-control.security": ["view"],
+    }),
+  },
 
   "role-hr-admin": {
     ...grant(
@@ -263,8 +301,36 @@ export const seedRolePermissions: Record<string, RolePermissionMap> = {
 };
 
 /* ------------------------------------------------------------------ */
-/* Seed user accounts — one per existing mock employee                 */
+/* Accounts                                                             */
+/*                                                                       */
+/* The platform always starts with exactly one account: the Super       */
+/* Admin. It intentionally has a stable id (not derived from an         */
+/* employee) so the current session survives loading/clearing demo      */
+/* data. Demo accounts (one per seed employee, including a richer       */
+/* EMP001 identity) are a separate, opt-in dataset — see demo-seed.ts.  */
 /* ------------------------------------------------------------------ */
+
+export const SUPER_ADMIN_ACCOUNT_ID = "account-superadmin";
+
+export const superAdminAccount: UserAccount = {
+  id: SUPER_ADMIN_ACCOUNT_ID,
+  // Deliberately not "EMP001": the empty-state employee store starts blank,
+  // so the very first real employee ever created would also be auto-numbered
+  // EMP001 — colliding with this account's employeeId and silently blocking
+  // that person's own account creation (accounts must have a unique
+  // employeeId). This sentinel can never collide with an auto-generated
+  // EMP### code. Demo mode replaces this account wholesale (see
+  // demoUserAccounts below) with a real EMP001-linked identity.
+  employeeId: "SUPERADMIN",
+  name: "Ganesh Pandey",
+  email: "ganesh.pandey@company.com",
+  roleIds: ["role-super-admin"],
+  status: "Active",
+  siteIds: [],
+  passwordHash: hashPassword(DEMO_PASSWORD),
+  failedLoginAttempts: 0,
+  createdOn: "2018-01-10",
+};
 
 const roleByEmployeeId: Record<string, string> = {
   EMP001: "role-super-admin",
@@ -279,8 +345,11 @@ const roleByEmployeeId: Record<string, string> = {
   EMP010: "role-payroll-admin",
 };
 
-export const seedUserAccounts: UserAccount[] = employees.map((emp, i) => ({
-  id: `account-${emp.employeeId}`,
+/** Demo-only accounts, one per seed employee — loaded via "Load Demo Data", never on a normal empty start. */
+export const demoUserAccounts: UserAccount[] = employees.map((emp, i) => ({
+  // EMP001's demo account reuses the stable Super Admin id, so a session
+  // started before "Load Demo Data" is clicked stays valid afterward.
+  id: emp.employeeId === "EMP001" ? SUPER_ADMIN_ACCOUNT_ID : `account-${emp.employeeId}`,
   employeeId: emp.employeeId,
   name: emp.name,
   email: emp.email,
@@ -296,7 +365,7 @@ export const seedUserAccounts: UserAccount[] = employees.map((emp, i) => ({
 export const seedDeviceSessions: DeviceSession[] = [
   {
     id: "session-seed-1",
-    accountId: "account-EMP001",
+    accountId: SUPER_ADMIN_ACCOUNT_ID,
     device: "MacBook Pro · macOS",
     browser: "Chrome 128",
     location: "Noida, India",
@@ -307,7 +376,7 @@ export const seedDeviceSessions: DeviceSession[] = [
   },
   {
     id: "session-seed-2",
-    accountId: "account-EMP001",
+    accountId: SUPER_ADMIN_ACCOUNT_ID,
     device: "iPhone 15 · iOS",
     browser: "Safari Mobile",
     location: "Noida, India",
@@ -322,7 +391,7 @@ export const seedSecurityEvents: SecurityEvent[] = [
   {
     id: "evt-1",
     type: "login_success",
-    accountId: "account-EMP001",
+    accountId: SUPER_ADMIN_ACCOUNT_ID,
     actorName: "Ganesh Pandey",
     detail: "Signed in successfully",
     ip: "203.0.113.42",

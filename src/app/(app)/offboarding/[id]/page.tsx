@@ -54,7 +54,10 @@ export default function OffboardingCaseDetailPage(props: PageProps<"/offboarding
   } = useOffboarding();
 
   const record = caseById(id);
-  if (!record) notFound();
+  if (!record) {
+    notFound();
+    return null;
+  }
 
   const [active, setActive] = useState("overview");
   const [rejectOpen, setRejectOpen] = useState(false);
@@ -62,37 +65,37 @@ export default function OffboardingCaseDetailPage(props: PageProps<"/offboarding
   const [payModalOpen, setPayModalOpen] = useState(false);
   const [lineItemModalOpen, setLineItemModalOpen] = useState(false);
 
-  const isOwn = record.employeeId === currentUser.employeeId;
-  const clearanceEditable = canManage && openStatuses.includes(record.status);
-  const canComplete = canManage && record.clearanceItems.every((i) => i.status === "Cleared") && record.settlement.status === "Paid" && record.status !== "Completed";
+  const isOwn = record!.employeeId === currentUser.employeeId;
+  const clearanceEditable = canManage && openStatuses.includes(record!.status);
+  const canComplete = canManage && record!.clearanceItems.every((i) => i.status === "Cleared") && record!.settlement.status === "Paid" && record!.status !== "Completed";
 
   function handleApprove() {
-    const result = approveSeparation(record.id);
+    const result = approveSeparation(record!.id);
     (result.ok ? toast.success : toast.error)(result.message);
   }
 
   function handleRejectSubmit(e: FormEvent<HTMLFormElement>) {
     e.preventDefault();
     const form = new FormData(e.currentTarget);
-    const result = rejectSeparation(record.id, String(form.get("reason") ?? ""));
+    const result = rejectSeparation(record!.id, String(form.get("reason") ?? ""));
     (result.ok ? toast.success : toast.error)(result.message);
     if (result.ok) setRejectOpen(false);
   }
 
   function handleWithdraw() {
-    const result = withdrawResignation(record.id);
+    const result = withdrawResignation(record!.id);
     (result.ok ? toast.success : toast.error)(result.message);
   }
 
   function handleClearanceChange(itemId: string, status: ClearanceItemStatus) {
-    const result = updateClearanceItem(record.id, itemId, status);
+    const result = updateClearanceItem(record!.id, itemId, status);
     if (!result.ok) toast.error(result.message);
   }
 
   function handleScheduleSubmit(e: FormEvent<HTMLFormElement>) {
     e.preventDefault();
     const form = new FormData(e.currentTarget);
-    const result = scheduleExitInterview(record.id, String(form.get("scheduledOn") ?? ""), String(form.get("conductedBy") ?? ""));
+    const result = scheduleExitInterview(record!.id, String(form.get("scheduledOn") ?? ""), String(form.get("conductedBy") ?? ""));
     (result.ok ? toast.success : toast.error)(result.message);
     if (result.ok) setInterviewModal(null);
   }
@@ -100,7 +103,7 @@ export default function OffboardingCaseDetailPage(props: PageProps<"/offboarding
   function handleFeedbackSubmit(e: FormEvent<HTMLFormElement>) {
     e.preventDefault();
     const form = new FormData(e.currentTarget);
-    const result = submitExitInterviewFeedback(record.id, {
+    const result = submitExitInterviewFeedback(record!.id, {
       primaryReason: String(form.get("primaryReason") ?? ""),
       feedbackNotes: String(form.get("feedbackNotes") ?? ""),
       wouldRehire: form.get("wouldRehire") === "Yes",
@@ -111,7 +114,7 @@ export default function OffboardingCaseDetailPage(props: PageProps<"/offboarding
   }
 
   function handleComputeSettlement() {
-    const result = computeSettlement(record.id);
+    const result = computeSettlement(record!.id);
     (result.ok ? toast.success : toast.error)(result.message);
   }
 
@@ -119,7 +122,7 @@ export default function OffboardingCaseDetailPage(props: PageProps<"/offboarding
     e.preventDefault();
     const form = new FormData(e.currentTarget);
     const result = addSettlementLineItem(
-      record.id,
+      record!.id,
       String(form.get("label") ?? ""),
       form.get("type") === "Deduction" ? "Deduction" : "Earning",
       Number(form.get("amount") ?? 0),
@@ -134,18 +137,18 @@ export default function OffboardingCaseDetailPage(props: PageProps<"/offboarding
   function handlePaySubmit(e: FormEvent<HTMLFormElement>) {
     e.preventDefault();
     const form = new FormData(e.currentTarget);
-    const result = markSettlementPaid(record.id, String(form.get("reference") ?? ""));
+    const result = markSettlementPaid(record!.id, String(form.get("reference") ?? ""));
     (result.ok ? toast.success : toast.error)(result.message);
     if (result.ok) setPayModalOpen(false);
   }
 
   function handleAdvanceLetter(letter: "relieving" | "experience") {
-    const result = advanceLetterStatus(record.id, letter);
+    const result = advanceLetterStatus(record!.id, letter);
     (result.ok ? toast.success : toast.error)(result.message);
   }
 
   function handleComplete() {
-    const result = completeOffboarding(record.id);
+    const result = completeOffboarding(record!.id);
     (result.ok ? toast.success : toast.error)(result.message);
   }
 
@@ -167,11 +170,11 @@ export default function OffboardingCaseDetailPage(props: PageProps<"/offboarding
       </Link>
 
       <PageHeader
-        title={record.employee}
-        description={`${record.designation} · ${record.department} · ${record.type} · Last working day ${record.lastWorkingDay}`}
+        title={record!.employee}
+        description={`${record!.designation} · ${record!.department} · ${record!.type} · Last working day ${record!.lastWorkingDay}`}
         action={
           <div className="flex gap-2">
-            {canManage && record.status === "Pending Approval" && (
+            {canManage && record!.status === "Pending Approval" && (
               <>
                 <Button variant="outline" onClick={() => setRejectOpen(true)}>
                   <X className="h-4 w-4" /> Reject
@@ -181,7 +184,7 @@ export default function OffboardingCaseDetailPage(props: PageProps<"/offboarding
                 </Button>
               </>
             )}
-            {isOwn && record.status === "Pending Approval" && (
+            {isOwn && record!.status === "Pending Approval" && (
               <Button variant="outline" onClick={handleWithdraw}>
                 <XCircle className="h-4 w-4" /> Withdraw
               </Button>
@@ -197,13 +200,13 @@ export default function OffboardingCaseDetailPage(props: PageProps<"/offboarding
 
       <Card className="p-5">
         <div className="flex flex-wrap items-center gap-3 text-sm text-slate-500 dark:text-slate-400">
-          <StatusBadge status={record.status} />
-          <span>Reason: <span className="font-medium text-slate-700 dark:text-slate-200">{record.reason}</span></span>
-          <span>Notice: {record.noticePeriodDays} days</span>
-          {record.approverName && <span>Decided by {record.approverName}</span>}
+          <StatusBadge status={record!.status} />
+          <span>Reason: <span className="font-medium text-slate-700 dark:text-slate-200">{record!.reason}</span></span>
+          <span>Notice: {record!.noticePeriodDays} days</span>
+          {record!.approverName && <span>Decided by {record!.approverName}</span>}
         </div>
-        {record.decisionReason && (
-          <p className="mt-3 text-sm text-slate-500 dark:text-slate-400">{record.decisionReason}</p>
+        {record!.decisionReason && (
+          <p className="mt-3 text-sm text-slate-500 dark:text-slate-400">{record!.decisionReason}</p>
         )}
       </Card>
 
@@ -212,23 +215,23 @@ export default function OffboardingCaseDetailPage(props: PageProps<"/offboarding
       {active === "overview" && (
         <Card>
           <CardContent className="grid grid-cols-2 gap-4 pt-5 text-sm sm:grid-cols-3">
-            <InfoRow label="Separation Type" value={record.type} />
-            <InfoRow label="Resignation Date" value={record.resignationDate} />
-            <InfoRow label="Last Working Day" value={record.lastWorkingDay} />
-            <InfoRow label="Notice Period" value={`${record.noticePeriodDays} days`} />
-            <InfoRow label="Initiated By" value={record.initiatedBy} />
-            <InfoRow label="Status" value={record.status} />
+            <InfoRow label="Separation Type" value={record!.type} />
+            <InfoRow label="Resignation Date" value={record!.resignationDate} />
+            <InfoRow label="Last Working Day" value={record!.lastWorkingDay} />
+            <InfoRow label="Notice Period" value={`${record!.noticePeriodDays} days`} />
+            <InfoRow label="Initiated By" value={record!.initiatedBy} />
+            <InfoRow label="Status" value={record!.status} />
           </CardContent>
           <div className="border-t border-slate-100 px-5 py-4 dark:border-slate-800">
             <p className="mb-2 text-xs font-semibold uppercase tracking-wide text-slate-400 dark:text-slate-500">Activity</p>
             <div className="space-y-2">
-              {auditFor(record.id).map((entry) => (
+              {auditFor(record!.id).map((entry) => (
                 <div key={entry.id} className="flex items-start justify-between gap-4 text-sm">
                   <span className="text-slate-600 dark:text-slate-300">{entry.detail} <span className="text-xs text-slate-400 dark:text-slate-500">— {entry.actorName}</span></span>
                   <span className="shrink-0 text-xs text-slate-400 dark:text-slate-500">{formatDateTime(entry.timestamp)}</span>
                 </div>
               ))}
-              {auditFor(record.id).length === 0 && <p className="text-sm text-slate-400 dark:text-slate-500">No activity yet.</p>}
+              {auditFor(record!.id).length === 0 && <p className="text-sm text-slate-400 dark:text-slate-500">No activity yet.</p>}
             </div>
           </div>
         </Card>
@@ -237,7 +240,7 @@ export default function OffboardingCaseDetailPage(props: PageProps<"/offboarding
       {active === "clearance" && (
         <div className="space-y-4">
           {departmentOrder.map((dept) => {
-            const items = record.clearanceItems.filter((i) => i.department === dept);
+            const items = record!.clearanceItems.filter((i) => i.department === dept);
             if (items.length === 0) return null;
             return (
               <Card key={dept}>
@@ -277,29 +280,29 @@ export default function OffboardingCaseDetailPage(props: PageProps<"/offboarding
         <Card>
           <CardContent className="space-y-4 pt-5">
             <div className="flex items-center justify-between">
-              <StatusBadge status={record.exitInterview.status} />
-              {canManage && record.exitInterview.status === "Not Scheduled" && (
+              <StatusBadge status={record!.exitInterview.status} />
+              {canManage && record!.exitInterview.status === "Not Scheduled" && (
                 <Button size="sm" onClick={() => setInterviewModal("schedule")}>
                   Schedule Interview
                 </Button>
               )}
-              {canManage && record.exitInterview.status === "Scheduled" && (
+              {canManage && record!.exitInterview.status === "Scheduled" && (
                 <Button size="sm" onClick={() => setInterviewModal("feedback")}>
                   Record Feedback
                 </Button>
               )}
             </div>
-            {record.exitInterview.scheduledOn && (
-              <InfoRow label="Scheduled On" value={`${record.exitInterview.scheduledOn} with ${record.exitInterview.conductedBy ?? "—"}`} />
+            {record!.exitInterview.scheduledOn && (
+              <InfoRow label="Scheduled On" value={`${record!.exitInterview.scheduledOn} with ${record!.exitInterview.conductedBy ?? "—"}`} />
             )}
-            {record.exitInterview.status === "Completed" && (
+            {record!.exitInterview.status === "Completed" && (
               <div className="grid grid-cols-2 gap-4 text-sm">
-                <InfoRow label="Primary Reason" value={record.exitInterview.primaryReason ?? "—"} />
-                <InfoRow label="Would Rehire" value={record.exitInterview.wouldRehire ? "Yes" : "No"} />
-                <InfoRow label="Rating" value={`${record.exitInterview.rating ?? "—"} / 5`} />
+                <InfoRow label="Primary Reason" value={record!.exitInterview.primaryReason ?? "—"} />
+                <InfoRow label="Would Rehire" value={record!.exitInterview.wouldRehire ? "Yes" : "No"} />
+                <InfoRow label="Rating" value={`${record!.exitInterview.rating ?? "—"} / 5`} />
                 <div className="col-span-2">
                   <p className="mb-1 text-xs font-medium text-slate-400 dark:text-slate-500">Feedback Notes</p>
-                  <p className="text-sm text-slate-700 dark:text-slate-200">{record.exitInterview.feedbackNotes}</p>
+                  <p className="text-sm text-slate-700 dark:text-slate-200">{record!.exitInterview.feedbackNotes}</p>
                 </div>
               </div>
             )}
@@ -311,14 +314,14 @@ export default function OffboardingCaseDetailPage(props: PageProps<"/offboarding
         <Card>
           <CardContent className="space-y-4 pt-5">
             <div className="flex items-center justify-between">
-              <StatusBadge status={record.settlement.status} />
+              <StatusBadge status={record!.settlement.status} />
               <div className="flex gap-2">
-                {canManage && record.settlement.status === "Pending" && (
+                {canManage && record!.settlement.status === "Pending" && (
                   <Button size="sm" onClick={handleComputeSettlement}>
                     <Calculator className="h-3.5 w-3.5" /> Compute Settlement
                   </Button>
                 )}
-                {canManage && record.settlement.status === "Processing" && (
+                {canManage && record!.settlement.status === "Processing" && (
                   <>
                     <Button size="sm" variant="outline" onClick={() => setLineItemModalOpen(true)}>
                       Add Line Item
@@ -331,7 +334,7 @@ export default function OffboardingCaseDetailPage(props: PageProps<"/offboarding
               </div>
             </div>
 
-            {record.settlement.lineItems.length > 0 && (
+            {record!.settlement.lineItems.length > 0 && (
               <Table>
                 <THead>
                   <Th>Item</Th>
@@ -339,7 +342,7 @@ export default function OffboardingCaseDetailPage(props: PageProps<"/offboarding
                   <Th>Amount</Th>
                 </THead>
                 <TBody>
-                  {record.settlement.lineItems.map((li) => (
+                  {record!.settlement.lineItems.map((li) => (
                     <Tr key={li.id}>
                       <Td className="font-medium text-slate-700 dark:text-slate-200">{li.label}</Td>
                       <Td>{li.type}</Td>
@@ -355,11 +358,11 @@ export default function OffboardingCaseDetailPage(props: PageProps<"/offboarding
 
             <div className="flex items-center justify-between rounded-xl bg-slate-50 px-4 py-3 dark:bg-slate-800">
               <span className="text-sm font-medium text-slate-600 dark:text-slate-300">Net Payable</span>
-              <span className="text-lg font-bold text-slate-900 dark:text-white">{currency(record.settlement.netPayable)}</span>
+              <span className="text-lg font-bold text-slate-900 dark:text-white">{currency(record!.settlement.netPayable)}</span>
             </div>
-            {record.settlement.status === "Paid" && (
+            {record!.settlement.status === "Paid" && (
               <p className="text-xs text-slate-400 dark:text-slate-500">
-                Paid on {record.settlement.paidOn} · Reference {record.settlement.reference}
+                Paid on {record!.settlement.paidOn} · Reference {record!.settlement.reference}
               </p>
             )}
           </CardContent>
@@ -376,7 +379,7 @@ export default function OffboardingCaseDetailPage(props: PageProps<"/offboarding
             </THead>
             <TBody>
               {(["relieving", "experience"] as const).map((letter) => {
-                const status = letter === "relieving" ? record.relievingLetterStatus : record.experienceLetterStatus;
+                const status = letter === "relieving" ? record!.relievingLetterStatus : record!.experienceLetterStatus;
                 return (
                   <Tr key={letter}>
                     <Td className="font-medium text-slate-700 dark:text-slate-200">{letter === "relieving" ? "Relieving Letter" : "Experience Letter"}</Td>
@@ -448,7 +451,7 @@ export default function OffboardingCaseDetailPage(props: PageProps<"/offboarding
       <Modal open={interviewModal === "feedback"} onClose={() => setInterviewModal(null)} title="Record Exit Interview Feedback">
         <form className="space-y-4" onSubmit={handleFeedbackSubmit}>
           <Field label="Primary Reason">
-            <Select name="primaryReason" required defaultValue={record.reason}>
+            <Select name="primaryReason" required defaultValue={record!.reason}>
               {separationReasons.map((r) => (
                 <option key={r}>{r}</option>
               ))}
@@ -505,7 +508,7 @@ export default function OffboardingCaseDetailPage(props: PageProps<"/offboarding
       <Modal open={payModalOpen} onClose={() => setPayModalOpen(false)} title="Mark Settlement Paid">
         <form className="space-y-4" onSubmit={handlePaySubmit}>
           <p className="text-sm text-slate-500 dark:text-slate-400">
-            Net payable: <span className="font-semibold text-slate-800 dark:text-slate-100">{currency(record.settlement.netPayable)}</span>
+            Net payable: <span className="font-semibold text-slate-800 dark:text-slate-100">{currency(record!.settlement.netPayable)}</span>
           </p>
           <Field label="Payment Reference">
             <Input name="reference" required placeholder="e.g. NEFT-2024-0912" />

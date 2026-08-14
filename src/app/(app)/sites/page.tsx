@@ -1,7 +1,7 @@
 "use client";
 
 import Link from "next/link";
-import { Plus } from "lucide-react";
+import { Building2, Plus, Sparkles } from "lucide-react";
 import { PageHeader } from "@/components/layout/page-header";
 import { Card } from "@/components/ui/card";
 import { Button } from "@/components/ui/button";
@@ -9,10 +9,51 @@ import { Badge } from "@/components/ui/badge";
 import { StatusBadge } from "@/components/ui/status-badge";
 import { SiteLogo } from "@/components/ui/site-logo";
 import { useSite } from "@/lib/site-context";
-import { employees } from "@/lib/mock-data";
+import { useEmployees } from "@/lib/employee-context";
+import { loadDemoData } from "@/lib/demo-seed";
 
 export default function SitesPage() {
   const { sites, setCurrentSiteId } = useSite();
+  const { employees } = useEmployees();
+
+  if (sites.length === 0) {
+    return (
+      <div>
+        <PageHeader title="Sites" description="Manage every tenant site onboarded to this platform" />
+        <Card className="flex flex-col items-center gap-4 p-12 text-center">
+          <div className="flex h-14 w-14 items-center justify-center rounded-2xl bg-indigo-50 text-indigo-600 dark:bg-indigo-500/10 dark:text-indigo-400">
+            <Building2 className="h-7 w-7" />
+          </div>
+          <div>
+            <h2 className="text-lg font-bold text-slate-900 dark:text-white">Welcome to your HRMS</h2>
+            <p className="mt-1 max-w-sm text-sm text-slate-500 dark:text-slate-400">
+              You haven&apos;t onboarded any sites yet. Create your first site to start adding organization structure,
+              employees and a Site Admin.
+            </p>
+          </div>
+          <div className="flex flex-wrap items-center justify-center gap-3">
+            <Link href="/sites/new">
+              <Button>
+                <Plus className="h-4 w-4" /> Create Your First Site
+              </Button>
+            </Link>
+            <Button
+              variant="outline"
+              onClick={() => {
+                loadDemoData();
+                window.location.reload();
+              }}
+            >
+              <Sparkles className="h-4 w-4" /> Load Demo Data
+            </Button>
+          </div>
+          <p className="text-xs text-slate-400 dark:text-slate-500">
+            Load Demo Data hydrates the platform with a sample multi-site dataset for development/testing.
+          </p>
+        </Card>
+      </div>
+    );
+  }
 
   return (
     <div>
@@ -51,7 +92,9 @@ export default function SitesPage() {
                 <p>{site.adminName} &middot; {site.adminEmail}</p>
                 <div className="flex items-center gap-2 pt-1">
                   <Badge tone="indigo">{site.package}</Badge>
-                  <span className="text-xs text-slate-400 dark:text-slate-500">{siteEmployeeCount} employees</span>
+                  <span className="text-xs text-slate-400 dark:text-slate-500">
+                    {siteEmployeeCount} employee{siteEmployeeCount === 1 ? "" : "s"}
+                  </span>
                 </div>
               </div>
 

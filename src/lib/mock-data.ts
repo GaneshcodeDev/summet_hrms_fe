@@ -1,13 +1,10 @@
 import type {
   Activity,
-  AttendanceDay,
   AttendanceReportRow,
-  AttendanceStatus,
   Department,
   Employee,
   JobOpening,
   PackagePlan,
-  Payslip,
   PerformanceReview,
   Site,
   SiteStatus,
@@ -126,6 +123,11 @@ export const currentUser = {
   ],
 };
 
+// Day-one seed data only. `employee-store.ts` seeds its persistent store from
+// this array on first load; from then on the store (via `useEmployees()` /
+// `@/lib/employee-context`) is the live, mutable source of truth for
+// employees. Modules not yet migrated onto that store still read this array
+// directly — see the architecture assessment's Phase 6 for the migration list.
 export const employees: Employee[] = [
   { id: "1", employeeId: "EMP001", name: "Ganesh Pandey", email: "ganesh.pandey@company.com", phone: "+91 98765 43210", department: "Engineering", designation: "Senior Software Engineer", status: "Active", location: "Noida", dateOfJoining: "2022-01-15", siteId: "site-1", companyId: "company-1", businessUnitId: "bu-tech", departmentId: "dept-engineering", locationId: "loc-eng-wing", costCenterId: "cc-eng" },
   { id: "2", employeeId: "EMP002", name: "Rohit Sharma", email: "rohit.sharma@company.com", phone: "+91 98765 43211", department: "Engineering", designation: "Software Engineer", status: "Active", location: "Noida", dateOfJoining: "2021-03-10", siteId: "site-1", reportingManagerId: "EMP001", companyId: "company-1", businessUnitId: "bu-tech", departmentId: "dept-engineering", locationId: "loc-eng-wing", costCenterId: "cc-eng" },
@@ -152,29 +154,9 @@ export const departments: Department[] = [
 // Designation is now a configurable Master (see @/lib/master-data) instead of
 // a hardcoded array, so it can be managed centrally like every other master.
 
-const attendanceOverrides: Record<number, AttendanceStatus> = {
-  4: "Weekend", 5: "Weekend",
-  10: "Half Day",
-  11: "Weekend", 12: "Weekend",
-  15: "On Leave",
-  18: "Weekend", 19: "Weekend",
-  22: "Absent",
-  25: "Weekend", 26: "Weekend",
-  27: "Holiday",
-};
-
-export const attendanceMay2024: AttendanceDay[] = Array.from({ length: 31 }, (_, i) => {
-  const date = i + 1;
-  return { date, status: attendanceOverrides[date] ?? "Present" };
-});
-
-export const attendanceSummary = {
-  presentDays: 18,
-  absentDays: 2,
-  halfDays: 1,
-  onLeave: 1,
-  workingDays: 23,
-};
+// attendanceMay2024 / attendanceSummary removed — Attendance is now a real
+// store-backed module (see attendance-store.ts / attendance-context.tsx),
+// generated per employee+site rather than one hardcoded calendar for everyone.
 
 export const attendanceReport: AttendanceReportRow[] = [
   { employee: "Ganesh Pandey", department: "Engineering", presentDays: 20, absentDays: 1, halfDays: 0, onLeave: 1, attendancePct: 90, siteId: "site-1" },
@@ -184,34 +166,10 @@ export const attendanceReport: AttendanceReportRow[] = [
   { employee: "Sneha Kapoor", department: "Human Resources", presentDays: 17, absentDays: 1, halfDays: 2, onLeave: 2, attendancePct: 81, siteId: "site-3" },
 ];
 
-export const payslip: Payslip = {
-  id: "1",
-  month: "May 2024",
-  employee: "Ganesh Pandey",
-  employeeId: "EMP001",
-  designation: "Senior Software Engineer",
-  paymentDate: "31 May 2024",
-  bankName: "HDFC Bank",
-  bankAccount: "XXXX XXXX 0134",
-  earnings: [
-    { label: "Basic Salary", amount: 35000 },
-    { label: "HRA", amount: 14000 },
-    { label: "Special Allowance", amount: 10000 },
-    { label: "Other Allowance", amount: 5000 },
-  ],
-  deductions: [
-    { label: "PF", amount: 4200 },
-    { label: "Professional Tax", amount: 200 },
-    { label: "Income Tax", amount: 7344 },
-    { label: "Other Deductions", amount: 100 },
-  ],
-};
-
-export const payrollHistory = [
-  { month: "May 2024", status: "Processed on 31 May 2024" },
-  { month: "April 2024", status: "Processed on 30 Apr 2024" },
-  { month: "March 2024", status: "Processed on 31 Mar 2024" },
-];
+// The old static single-employee payslip/payroll-history mocks are gone —
+// Payroll is now a real store-backed module (see payroll-engine.ts /
+// payroll-context.tsx), generated per employee+site rather than one
+// hardcoded example for everyone.
 
 export const jobOpenings: JobOpening[] = [
   { id: "1", title: "Senior Software Engineer", department: "Engineering", location: "Noida", applicants: 25, status: "Active", siteId: "site-1" },
@@ -239,105 +197,9 @@ export const recentActivities: Activity[] = [
   { id: "8", name: "Anjali Kumari", action: "Onboarded a new site", time: "4 days ago" },
 ];
 
-export const upcomingBirthdays = [
-  { name: "Anjali Kumari", date: "May 20" },
-  { name: "Vikram Desai", date: "May 26" },
-  { name: "Sneha Kapoor", date: "Jun 02" },
-];
-
-export const attendanceOverview = [
-  { day: "Mon", value: 92 }, { day: "Tue", value: 88 }, { day: "Wed", value: 95 },
-  { day: "Thu", value: 90 }, { day: "Fri", value: 97 }, { day: "Sat", value: 40 },
-  { day: "Sun", value: 20 },
-];
-
-export const departmentDistribution = [
-  { name: "Engineering", value: 40, color: "#4f46e5" },
-  { name: "Sales & Marketing", value: 20, color: "#f59e0b" },
-  { name: "Finance", value: 15, color: "#10b981" },
-  { name: "HR", value: 15, color: "#0ea5e9" },
-  { name: "Others", value: 10, color: "#94a3b8" },
-];
-
-export const payrollSummary = [
-  { month: "Jan", value: 95 }, { month: "Feb", value: 100 }, { month: "Mar", value: 88 },
-  { month: "Apr", value: 105 }, { month: "May", value: 112 }, { month: "Jun", value: 98 },
-];
-
-export const payrollCostByDept = [
-  { name: "Engineering", value: 40, color: "#4f46e5" },
-  { name: "Sales & Marketing", value: 20, color: "#f59e0b" },
-  { name: "HR", value: 20, color: "#0ea5e9" },
-  { name: "Finance", value: 20, color: "#10b981" },
-];
-
-export interface Document {
-  id: string;
-  name: string;
-  type: string;
-  uploadedOn: string;
-  status: "Verified" | "Pending";
-}
-
-export interface BankDetail {
-  bankName: string;
-  accountNumber: string;
-  ifsc: string;
-  branch: string;
-  panNumber: string;
-  uan: string;
-}
-
-export interface SalaryStructure {
-  ctc: number;
-  earnings: { label: string; amount: number }[];
-  deductions: { label: string; amount: number }[];
-}
-
-const defaultDocuments: Document[] = [
-  { id: "1", name: "Aadhar Card.pdf", type: "Identity Proof", uploadedOn: "2022-01-15", status: "Verified" },
-  { id: "2", name: "PAN Card.pdf", type: "Identity Proof", uploadedOn: "2022-01-15", status: "Verified" },
-  { id: "3", name: "Offer Letter.pdf", type: "Employment", uploadedOn: "2022-01-15", status: "Verified" },
-  { id: "4", name: "Relieving Letter.pdf", type: "Employment", uploadedOn: "2022-01-20", status: "Pending" },
-  { id: "5", name: "Educational Certificate.pdf", type: "Education", uploadedOn: "2022-01-16", status: "Verified" },
-];
-
-const defaultBankDetail: BankDetail = {
-  bankName: "HDFC Bank",
-  accountNumber: "XXXX XXXX 0134",
-  ifsc: "HDFC0001234",
-  branch: "Sector 62, Noida",
-  panNumber: "ABCDE1234F",
-  uan: "101234567890",
-};
-
-export function getEmployeeSalaryStructure(employee: Employee): SalaryStructure {
-  const baseSeed = employee.employeeId.charCodeAt(3) % 5;
-  const basic = 30000 + baseSeed * 5000;
-  return {
-    ctc: (basic + basic * 0.4 + basic * 0.3) * 12,
-    earnings: [
-      { label: "Basic Salary", amount: basic },
-      { label: "HRA", amount: Math.round(basic * 0.4) },
-      { label: "Special Allowance", amount: Math.round(basic * 0.25) },
-      { label: "Other Allowance", amount: 5000 },
-    ],
-    deductions: [
-      { label: "PF", amount: Math.round(basic * 0.12) },
-      { label: "Professional Tax", amount: 200 },
-      { label: "Income Tax", amount: Math.round(basic * 0.15) },
-      { label: "Other Deductions", amount: 100 },
-    ],
-  };
-}
-
-export function getEmployeeDocuments(employee: Employee): Document[] {
-  return defaultDocuments.map((d) => ({ ...d, id: `${employee.id}-${d.id}` }));
-}
-
-export function getEmployeeBankDetail(): BankDetail {
-  return defaultBankDetail;
-}
+// upcomingBirthdays / attendanceOverview / departmentDistribution / payrollSummary /
+// payrollCostByDept were the old hardcoded Dashboard chart data — removed. Dashboard
+// (Phase 5) and Payroll (Phase 6) now derive all of this from live stores.
 
 export interface TrainingProgram {
   id: string;

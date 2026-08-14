@@ -46,19 +46,22 @@ export default function OnboardingCaseDetailPage(props: PageProps<"/onboarding/[
   } = useOnboarding();
 
   const record = caseById(id);
-  if (!record) notFound();
+  if (!record) {
+    notFound();
+    return null;
+  }
 
   const [active, setActive] = useState("checklist");
   const [rejectTarget, setRejectTarget] = useState<OnboardingDocument | null>(null);
   const [cancelOpen, setCancelOpen] = useState(false);
   const fileInputs = useRef<Record<string, HTMLInputElement | null>>({});
 
-  const buddy = record.buddyId ? employees.find((e) => e.employeeId === record.buddyId) : undefined;
+  const buddy = record!.buddyId ? employees.find((e) => e.employeeId === record!.buddyId) : undefined;
   const progress = progressFor(record);
-  const isTerminal = record.status === "Completed" || record.status === "Cancelled";
+  const isTerminal = record!.status === "Completed" || record!.status === "Cancelled";
 
   function handleTaskStatusChange(task: OnboardingTask, status: OnboardingTaskStatus) {
-    const result = updateTaskStatus(record.id, task.id, status);
+    const result = updateTaskStatus(record!.id, task.id, status);
     if (!result.ok) toast.error(result.message);
   }
 
@@ -68,12 +71,12 @@ export default function OnboardingCaseDetailPage(props: PageProps<"/onboarding/[
 
   function handleFileChosen(docId: string, file: File | undefined) {
     if (!file) return;
-    const result = uploadDocument(record.id, docId, file.name);
+    const result = uploadDocument(record!.id, docId, file.name);
     (result.ok ? toast.success : toast.error)(result.message);
   }
 
   function handleVerify(doc: OnboardingDocument) {
-    const result = verifyDocument(record.id, doc.id, "Verified");
+    const result = verifyDocument(record!.id, doc.id, "Verified");
     (result.ok ? toast.success : toast.error)(result.message);
   }
 
@@ -81,30 +84,30 @@ export default function OnboardingCaseDetailPage(props: PageProps<"/onboarding/[
     e.preventDefault();
     if (!rejectTarget) return;
     const form = new FormData(e.currentTarget);
-    const result = verifyDocument(record.id, rejectTarget.id, "Rejected", String(form.get("reason") ?? ""));
+    const result = verifyDocument(record!.id, rejectTarget.id, "Rejected", String(form.get("reason") ?? ""));
     (result.ok ? toast.success : toast.error)(result.message);
     if (result.ok) setRejectTarget(null);
   }
 
   function handleSendForSignature(doc: OnboardingDocument) {
-    const result = sendForSignature(record.id, doc.id);
+    const result = sendForSignature(record!.id, doc.id);
     (result.ok ? toast.success : toast.error)(result.message);
   }
 
   function handleMarkSigned(doc: OnboardingDocument) {
-    const result = markSigned(record.id, doc.id);
+    const result = markSigned(record!.id, doc.id);
     (result.ok ? toast.success : toast.error)(result.message);
   }
 
   function handleComplete() {
-    const result = completeOnboarding(record.id);
+    const result = completeOnboarding(record!.id);
     (result.ok ? toast.success : toast.error)(result.message);
   }
 
   function handleCancelSubmit(e: FormEvent<HTMLFormElement>) {
     e.preventDefault();
     const form = new FormData(e.currentTarget);
-    const result = cancelOnboarding(record.id, String(form.get("reason") ?? ""));
+    const result = cancelOnboarding(record!.id, String(form.get("reason") ?? ""));
     (result.ok ? toast.success : toast.error)(result.message);
     if (result.ok) setCancelOpen(false);
   }
@@ -125,8 +128,8 @@ export default function OnboardingCaseDetailPage(props: PageProps<"/onboarding/[
       </Link>
 
       <PageHeader
-        title={record.candidateName}
-        description={`${record.designation} · ${record.department} · Joining ${record.joiningDate}`}
+        title={record!.candidateName}
+        description={`${record!.designation} · ${record!.department} · Joining ${record!.joiningDate}`}
         action={
           canManage &&
           !isTerminal && (
@@ -145,10 +148,10 @@ export default function OnboardingCaseDetailPage(props: PageProps<"/onboarding/[
       <Card className="p-5">
         <div className="flex flex-wrap items-center justify-between gap-4">
           <div className="flex flex-wrap items-center gap-3 text-sm text-slate-500 dark:text-slate-400">
-            <StatusBadge status={record.status} />
+            <StatusBadge status={record!.status} />
             {buddy && <span>Buddy: <span className="font-medium text-slate-700 dark:text-slate-200">{buddy.name}</span></span>}
-            <span>{record.candidateEmail}</span>
-            <span>{record.candidatePhone}</span>
+            <span>{record!.candidateEmail}</span>
+            <span>{record!.candidatePhone}</span>
           </div>
           <div className="flex items-center gap-3">
             <div className="h-2 w-40 overflow-hidden rounded-full bg-slate-100 dark:bg-slate-800">
@@ -157,8 +160,8 @@ export default function OnboardingCaseDetailPage(props: PageProps<"/onboarding/[
             <span className="text-sm font-semibold text-slate-700 dark:text-slate-200">{progress}%</span>
           </div>
         </div>
-        {record.status === "Cancelled" && record.cancelledReason && (
-          <p className="mt-3 text-sm text-rose-600 dark:text-rose-400">Cancelled — {record.cancelledReason}</p>
+        {record!.status === "Cancelled" && record!.cancelledReason && (
+          <p className="mt-3 text-sm text-rose-600 dark:text-rose-400">Cancelled — {record!.cancelledReason}</p>
         )}
       </Card>
 
@@ -167,7 +170,7 @@ export default function OnboardingCaseDetailPage(props: PageProps<"/onboarding/[
       {active === "checklist" && (
         <div className="space-y-4">
           {categoryOrder.map((category) => {
-            const tasks = record.tasks.filter((t) => t.category === category);
+            const tasks = record!.tasks.filter((t) => t.category === category);
             if (tasks.length === 0) return null;
             return (
               <Card key={category}>
@@ -230,14 +233,14 @@ export default function OnboardingCaseDetailPage(props: PageProps<"/onboarding/[
               <Th>Actions</Th>
             </THead>
             <TBody>
-              {record.documents.map((doc) => {
+              {record!.documents.map((doc) => {
                 const canUpload = canActOnDocuments(record) && !isTerminal && (doc.status === "Pending" || doc.status === "Rejected");
                 const canVerify = canManage && !isTerminal && doc.status === "Uploaded";
                 const canSend =
                   canManage && !isTerminal && doc.status === "Verified" && doc.signatureStatus === "Not Sent";
                 const canMarkSigned =
                   !isTerminal &&
-                  (canManage || record.employeeId === currentUser.employeeId) &&
+                  (canManage || record!.employeeId === currentUser.employeeId) &&
                   (doc.signatureStatus === "Sent" || doc.signatureStatus === "Viewed");
                 return (
                   <Tr key={doc.id}>
@@ -322,7 +325,7 @@ export default function OnboardingCaseDetailPage(props: PageProps<"/onboarding/[
       {active === "activity" && (
         <Card>
           <div className="divide-y divide-slate-50 dark:divide-slate-800/60">
-            {auditFor(record.id).map((entry) => (
+            {auditFor(record!.id).map((entry) => (
               <div key={entry.id} className="flex items-start justify-between gap-4 px-5 py-3.5">
                 <div>
                   <p className="text-sm text-slate-700 dark:text-slate-200">{entry.detail}</p>
@@ -331,7 +334,7 @@ export default function OnboardingCaseDetailPage(props: PageProps<"/onboarding/[
                 <span className="shrink-0 text-xs text-slate-400 dark:text-slate-500">{formatDateTime(entry.timestamp)}</span>
               </div>
             ))}
-            {auditFor(record.id).length === 0 && (
+            {auditFor(record!.id).length === 0 && (
               <p className="px-5 py-10 text-center text-sm text-slate-400 dark:text-slate-500">No activity yet.</p>
             )}
           </div>

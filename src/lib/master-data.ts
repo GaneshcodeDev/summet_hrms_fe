@@ -187,7 +187,13 @@ export const masterTypeConfig: Record<MasterType, MasterTypeConfig> = {
     scope: "tenant",
     fields: [
       { key: "paid", label: "Paid Leave", type: "boolean" },
-      { key: "maxDaysPerYear", label: "Max Days / Year", type: "number" },
+      { key: "maxDaysPerYear", label: "Annual Allocation", type: "number" },
+      { key: "carryForward", label: "Carry Forward", type: "boolean" },
+      { key: "maxCarryForwardDays", label: "Max Carry Forward Days", type: "number" },
+      { key: "maxConsecutiveDays", label: "Max Consecutive Days", type: "number" },
+      { key: "minNoticeDays", label: "Minimum Notice (Days)", type: "number" },
+      { key: "requiresApproval", label: "Requires Approval", type: "boolean" },
+      { key: "requiresDocument", label: "Requires Document", type: "boolean" },
     ],
   },
   HolidayType: {
@@ -481,24 +487,36 @@ export const seedMasterRecords: MasterRecord[] = [
   record({ id: "shift-evening", masterType: "Shift", name: "Evening Shift", code: "SH-EVE", siteId: "site-1", attributes: { shiftTypeId: stDay.id, startTime: "14:00", endTime: "22:00" } }),
   record({ id: "shift-night", masterType: "Shift", name: "Night Shift", code: "SH-NGT", siteId: "site-1", attributes: { shiftTypeId: stNight.id, startTime: "22:00", endTime: "06:00" } }),
 
-  record({ id: "leavetype-casual", masterType: "LeaveType", name: "Casual Leave", code: "CL", siteId: "site-1", attributes: { paid: true, maxDaysPerYear: 12 } }),
-  record({ id: "leavetype-sick", masterType: "LeaveType", name: "Sick Leave", code: "SL", siteId: "site-1", attributes: { paid: true, maxDaysPerYear: 12 } }),
-  record({ id: "leavetype-earned", masterType: "LeaveType", name: "Earned Leave", code: "EL", siteId: "site-1", attributes: { paid: true, maxDaysPerYear: 20 } }),
-  record({ id: "leavetype-compoff", masterType: "LeaveType", name: "Comp Off", code: "CO", siteId: "site-1", attributes: { paid: true, maxDaysPerYear: 5 } }),
-  record({ id: "leavetype-lop", masterType: "LeaveType", name: "Loss of Pay", code: "LOP", siteId: "site-1", attributes: { paid: false, maxDaysPerYear: 0 } }),
-  record({ id: "leavetype-maternity", masterType: "LeaveType", name: "Maternity Leave", code: "ML", siteId: "site-1", attributes: { paid: true, maxDaysPerYear: 182 } }),
-  record({ id: "leavetype-paternity", masterType: "LeaveType", name: "Paternity Leave", code: "PL", siteId: "site-1", attributes: { paid: true, maxDaysPerYear: 15 } }),
+  record({ id: "leavetype-casual", masterType: "LeaveType", name: "Casual Leave", code: "CL", siteId: "site-1", attributes: { paid: true, maxDaysPerYear: 12, carryForward: true, maxCarryForwardDays: 5, requiresApproval: true } }),
+  record({ id: "leavetype-sick", masterType: "LeaveType", name: "Sick Leave", code: "SL", siteId: "site-1", attributes: { paid: true, maxDaysPerYear: 12, carryForward: false, requiresApproval: true, requiresDocument: true } }),
+  record({ id: "leavetype-earned", masterType: "LeaveType", name: "Earned Leave", code: "EL", siteId: "site-1", attributes: { paid: true, maxDaysPerYear: 20, carryForward: true, maxCarryForwardDays: 10, minNoticeDays: 3, requiresApproval: true } }),
+  record({ id: "leavetype-compoff", masterType: "LeaveType", name: "Comp Off", code: "CO", siteId: "site-1", attributes: { paid: true, maxDaysPerYear: 5, carryForward: false, requiresApproval: true } }),
+  record({ id: "leavetype-lop", masterType: "LeaveType", name: "Loss of Pay", code: "LOP", siteId: "site-1", attributes: { paid: false, maxDaysPerYear: 0, carryForward: false, requiresApproval: true } }),
+  record({ id: "leavetype-maternity", masterType: "LeaveType", name: "Maternity Leave", code: "ML", siteId: "site-1", attributes: { paid: true, maxDaysPerYear: 182, carryForward: false, minNoticeDays: 30, requiresApproval: true, requiresDocument: true } }),
+  record({ id: "leavetype-paternity", masterType: "LeaveType", name: "Paternity Leave", code: "PL", siteId: "site-1", attributes: { paid: true, maxDaysPerYear: 15, carryForward: false, requiresApproval: true } }),
+
+  ...["site-2", "site-3", "site-4"].flatMap((siteId) => [
+    record({ id: `leavetype-casual-${siteId}`, masterType: "LeaveType", name: "Casual Leave", code: "CL", siteId, attributes: { paid: true, maxDaysPerYear: 12, carryForward: true, maxCarryForwardDays: 5, requiresApproval: true } }),
+    record({ id: `leavetype-sick-${siteId}`, masterType: "LeaveType", name: "Sick Leave", code: "SL", siteId, attributes: { paid: true, maxDaysPerYear: 12, carryForward: false, requiresApproval: true, requiresDocument: true } }),
+    record({ id: `leavetype-earned-${siteId}`, masterType: "LeaveType", name: "Earned Leave", code: "EL", siteId, attributes: { paid: true, maxDaysPerYear: 20, carryForward: true, maxCarryForwardDays: 10, minNoticeDays: 3, requiresApproval: true } }),
+    record({ id: `leavetype-compoff-${siteId}`, masterType: "LeaveType", name: "Comp Off", code: "CO", siteId, attributes: { paid: true, maxDaysPerYear: 5, carryForward: false, requiresApproval: true } }),
+    record({ id: `leavetype-lop-${siteId}`, masterType: "LeaveType", name: "Loss of Pay", code: "LOP", siteId, attributes: { paid: false, maxDaysPerYear: 0, carryForward: false, requiresApproval: true } }),
+  ]),
 
   record({ id: "holidaytype-national", masterType: "HolidayType", name: "National Holiday", code: "NAT", siteId: "site-1" }),
   record({ id: "holidaytype-restricted", masterType: "HolidayType", name: "Restricted Holiday", code: "RH", siteId: "site-1" }),
   record({ id: "holidaytype-regional", masterType: "HolidayType", name: "Regional Holiday", code: "REG", siteId: "site-1" }),
 
-  record({ id: "salcomp-basic", masterType: "SalaryComponent", name: "Basic Salary", code: "BASIC", siteId: "site-1", attributes: { componentType: "Earning", calculationType: "Percentage", taxable: true } }),
-  record({ id: "salcomp-hra", masterType: "SalaryComponent", name: "HRA", code: "HRA", siteId: "site-1", attributes: { componentType: "Earning", calculationType: "Percentage", taxable: false } }),
+  // rate = % (of monthly-equivalent CTC for Basic, of Basic for HRA/PF); amount = fixed ₹/month.
+  // These are example/default figures, not statutory computations — fully editable here, and the
+  // payroll engine (payroll-engine.ts) falls back to the same defaults for any site that hasn't
+  // configured its own SalaryComponent records yet.
+  record({ id: "salcomp-basic", masterType: "SalaryComponent", name: "Basic Salary", code: "BASIC", siteId: "site-1", attributes: { componentType: "Earning", calculationType: "Percentage", taxable: true, rate: 50 } }),
+  record({ id: "salcomp-hra", masterType: "SalaryComponent", name: "HRA", code: "HRA", siteId: "site-1", attributes: { componentType: "Earning", calculationType: "Percentage", taxable: false, rate: 40 } }),
   record({ id: "salcomp-special", masterType: "SalaryComponent", name: "Special Allowance", code: "SPLA", siteId: "site-1", attributes: { componentType: "Earning", calculationType: "Fixed", taxable: true } }),
-  record({ id: "salcomp-other-allow", masterType: "SalaryComponent", name: "Other Allowance", code: "OALW", siteId: "site-1", attributes: { componentType: "Earning", calculationType: "Fixed", taxable: true } }),
-  record({ id: "salcomp-pf", masterType: "SalaryComponent", name: "Provident Fund", code: "PF", siteId: "site-1", attributes: { componentType: "Deduction", calculationType: "Percentage", taxable: false } }),
-  record({ id: "salcomp-pt", masterType: "SalaryComponent", name: "Professional Tax", code: "PT", siteId: "site-1", attributes: { componentType: "Deduction", calculationType: "Fixed", taxable: false } }),
+  record({ id: "salcomp-other-allow", masterType: "SalaryComponent", name: "Other Allowance", code: "OALW", siteId: "site-1", attributes: { componentType: "Earning", calculationType: "Fixed", taxable: true, amount: 5000 } }),
+  record({ id: "salcomp-pf", masterType: "SalaryComponent", name: "Provident Fund", code: "PF", siteId: "site-1", attributes: { componentType: "Deduction", calculationType: "Percentage", taxable: false, rate: 12 } }),
+  record({ id: "salcomp-pt", masterType: "SalaryComponent", name: "Professional Tax", code: "PT", siteId: "site-1", attributes: { componentType: "Deduction", calculationType: "Fixed", taxable: false, amount: 200 } }),
   record({ id: "salcomp-it", masterType: "SalaryComponent", name: "Income Tax", code: "IT", siteId: "site-1", attributes: { componentType: "Deduction", calculationType: "Percentage", taxable: false } }),
   record({ id: "salcomp-other-ded", masterType: "SalaryComponent", name: "Other Deductions", code: "ODED", siteId: "site-1", attributes: { componentType: "Deduction", calculationType: "Fixed", taxable: false } }),
 

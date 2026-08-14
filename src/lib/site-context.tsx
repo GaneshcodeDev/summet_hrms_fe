@@ -8,7 +8,6 @@ import {
   useSyncExternalStore,
   type ReactNode,
 } from "react";
-import { sites as initialSites } from "@/lib/mock-data";
 import { createLocalStorageStore } from "@/lib/local-store";
 import { useAccessControl } from "@/lib/access-control-context";
 import type { Site } from "@/lib/types";
@@ -16,7 +15,9 @@ import type { Site } from "@/lib/types";
 export const ALL_SITES_ID = "all";
 
 const siteIdStore = createLocalStorageStore<string>("hrms_current_site", ALL_SITES_ID);
-const sitesStore = createLocalStorageStore<Site[]>("hrms_sites", initialSites);
+// Real product starts with zero sites — see demo-seed.ts for the optional rich dataset.
+// Exported (unlike a purely-internal store) so demo-seed.ts can hydrate it without a provider mounted.
+export const sitesStore = createLocalStorageStore<Site[]>("hrms_sites", []);
 
 interface SiteContextValue {
   sites: Site[];
@@ -46,14 +47,36 @@ export function SiteProvider({ children }: { children: ReactNode }) {
     siteIdStore.getServerSnapshot,
   );
 
-  const currentSite = useMemo(
-    () => sites.find((s) => s.id === rawSiteId),
-    [sites, rawSiteId],
+  const { currentUser, isSuperAdmin } = useAccessControl();
+  const mappedSiteIds = useMemo(
+    () => currentUser.siteIds ?? [currentUser.siteId],
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+    [currentUser],
   );
-  // Fall back to "All Sites" if the stored id no longer matches a known site
+  const mappedSites = useMemo(
+    () => sites.filter((s) => mappedSiteIds.includes(s.id)),
+    [sites, mappedSiteIds],
+  );
+
+  // Super Admin can freely pick any site (including the "All Sites" aggregate
+  // view). Everyone else is pinned to a site they're actually mapped to,
+  // regardless of what's persisted in localStorage — this is enforced here,
+  // at the data layer, not just by hiding the switcher in the UI, so a Site
+  // Admin can never end up viewing another site's data.
+  const effectiveSiteId = useMemo(() => {
+    if (isSuperAdmin) return rawSiteId;
+    if (rawSiteId !== ALL_SITES_ID && mappedSiteIds.includes(rawSiteId)) return rawSiteId;
+    return mappedSites[0]?.id ?? ALL_SITES_ID;
+  }, [isSuperAdmin, rawSiteId, mappedSiteIds, mappedSites]);
+
+  const currentSite = useMemo(
+    () => sites.find((s) => s.id === effectiveSiteId),
+    [sites, effectiveSiteId],
+  );
+  // Fall back to "All Sites" if the effective id doesn't match a known site
   // (e.g. mock in-memory data reset while the selection was still persisted).
-  const isAllSites = rawSiteId === ALL_SITES_ID || !currentSite;
-  const currentSiteId = isAllSites ? ALL_SITES_ID : rawSiteId;
+  const isAllSites = effectiveSiteId === ALL_SITES_ID || !currentSite;
+  const currentSiteId = isAllSites ? ALL_SITES_ID : effectiveSiteId;
 
   const setCurrentSiteId = useCallback((id: string) => siteIdStore.set(id), []);
 
@@ -66,14 +89,6 @@ export function SiteProvider({ children }: { children: ReactNode }) {
       sitesStore.getSnapshot().map((s) => (s.id === id ? { ...s, ...patch } : s)),
     );
   }, []);
-
-  const { currentUser, isSuperAdmin } = useAccessControl();
-  const mappedSiteIds = currentUser.siteIds ?? [currentUser.siteId];
-  const mappedSites = useMemo(
-    () => sites.filter((s) => mappedSiteIds.includes(s.id)),
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-    [sites, currentUser],
-  );
 
   const value = useMemo(
     () => ({

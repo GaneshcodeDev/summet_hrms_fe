@@ -1,13 +1,7 @@
 "use client";
 
 import { createLocalStorageStore } from "@/lib/local-store";
-import {
-  seedDeviceSessions,
-  seedRolePermissions,
-  seedRoles,
-  seedSecurityEvents,
-  seedUserAccounts,
-} from "@/lib/rbac-data";
+import { seedRolePermissions, seedRoles, superAdminAccount } from "@/lib/rbac-data";
 import type {
   DeviceSession,
   Role,
@@ -21,21 +15,20 @@ import type {
  * Kept separate from AccessControlProvider so auth.ts can read and write it
  * from pages that render outside the app shell (login, forgot/reset password)
  * without needing a provider mounted.
+ *
+ * Roles/permissions are platform configuration, not tenant data, so they're
+ * always fully seeded. Accounts/sessions/security events start with just the
+ * Super Admin — the real empty-state product experience — see demo-seed.ts
+ * for the optional rich demo dataset.
  */
 export const rolesStore = createLocalStorageStore<Role[]>("hrms_roles", seedRoles);
 export const rolePermissionsStore = createLocalStorageStore<Record<string, RolePermissionMap>>(
   "hrms_role_permissions",
   seedRolePermissions,
 );
-export const accountsStore = createLocalStorageStore<UserAccount[]>("hrms_accounts", seedUserAccounts);
-export const deviceSessionsStore = createLocalStorageStore<DeviceSession[]>(
-  "hrms_device_sessions",
-  seedDeviceSessions,
-);
-export const securityEventsStore = createLocalStorageStore<SecurityEvent[]>(
-  "hrms_security_events",
-  seedSecurityEvents,
-);
+export const accountsStore = createLocalStorageStore<UserAccount[]>("hrms_accounts", [superAdminAccount]);
+export const deviceSessionsStore = createLocalStorageStore<DeviceSession[]>("hrms_device_sessions", []);
+export const securityEventsStore = createLocalStorageStore<SecurityEvent[]>("hrms_security_events", []);
 
 export function logSecurityEvent(event: Omit<SecurityEvent, "id" | "timestamp">) {
   const entry: SecurityEvent = {

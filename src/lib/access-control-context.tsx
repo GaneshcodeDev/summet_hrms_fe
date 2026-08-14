@@ -11,7 +11,7 @@ import {
   type ReactNode,
 } from "react";
 import { useRouter } from "next/navigation";
-import { currentUser as fallbackUser, employees, getEmployeeById } from "@/lib/mock-data";
+import { employeesStore, findEmployeeByEmployeeId, resolveEmployeeForAccount } from "@/lib/employee-store";
 import { actionsGrantedFor, featuresByModule, hashPassword } from "@/lib/rbac-data";
 import {
   accountsStore,
@@ -63,7 +63,13 @@ interface AccessControlContextValue {
   deleteRole: (id: string) => { ok: boolean; reason?: "system" | "in_use" };
   setRoleFeatureActions: (roleId: string, featureId: string, actions: PermissionAction[]) => void;
 
-  createAccount: (input: { employeeId: string; roleIds: string[]; siteIds: string[] }) => { account: UserAccount; tempPassword: string } | undefined;
+  createAccount: (input: {
+    employeeId: string;
+    roleIds: string[];
+    siteIds: string[];
+    /** If provided (e.g. Site Admin creation, where an admin sets a real password), used as-is instead of generating one. */
+    password?: string;
+  }) => { account: UserAccount; tempPassword: string } | undefined;
   setAccountRoles: (accountId: string, roleIds: string[]) => void;
   setAccountStatus: (accountId: string, status: AccountStatus) => void;
   unlockAccount: (accountId: string) => void;
@@ -148,20 +154,43 @@ export function AccessControlProvider({ children }: { children: ReactNode }) {
     [roles, currentAccount],
   );
 
+  // Plain-module subscription (no EmployeeProvider dependency needed — see
+  // employee-store.ts) so currentUser stays live if the signed-in person's
+  // own employee record changes, without creating a provider cycle (Employee
+  // itself depends on useAccessControl for permission checks).
+  const employeesSnapshot = useSyncExternalStore(
+    employeesStore.subscribe,
+    employeesStore.getSnapshot,
+    employeesStore.getServerSnapshot,
+  );
+
   const currentUser = useMemo<ResolvedUser>(() => {
-    // EMP001 always exists in the seed employee list, so this default is never undefined in practice.
-    const defaultEmployee = getEmployeeById(fallbackUser.employeeId)!;
     if (!currentAccount) {
-      return { ...defaultEmployee, role: fallbackUser.role, roles: [], account: undefined };
+      const placeholder = resolveEmployeeForAccount(
+        {
+          id: "unauthenticated",
+          employeeId: "",
+          name: "Guest",
+          email: "",
+          roleIds: [],
+          status: "Inactive",
+          siteIds: [],
+          passwordHash: "",
+          failedLoginAttempts: 0,
+          createdOn: "",
+        },
+        employeesSnapshot,
+      );
+      return { ...placeholder, role: "No Role Assigned", roles: [], account: undefined };
     }
-    const employee = getEmployeeById(currentAccount.employeeId) ?? defaultEmployee;
+    const employee = resolveEmployeeForAccount(currentAccount, employeesSnapshot);
     return {
       ...employee,
       role: currentRoles[0]?.name ?? "No Role Assigned",
       roles: currentRoles,
       account: currentAccount,
     };
-  }, [currentAccount, currentRoles]);
+  }, [currentAccount, currentRoles, employeesSnapshot]);
 
   const isSuperAdmin = currentRoles.some((r) => r.name === "Super Admin");
 
@@ -236,12 +265,12 @@ export function AccessControlProvider({ children }: { children: ReactNode }) {
   );
 
   const createAccount = useCallback<AccessControlContextValue["createAccount"]>(
-    ({ employeeId, roleIds, siteIds }) => {
-      const employee = employees.find((e) => e.employeeId === employeeId);
+    ({ employeeId, roleIds, siteIds, password }) => {
+      const employee = findEmployeeByEmployeeId(employeeId);
       if (!employee) return undefined;
       if (accountsStore.getSnapshot().some((a) => a.employeeId === employeeId)) return undefined;
 
-      const tempPassword = generateTempPassword();
+      const tempPassword = password?.trim() || generateTempPassword();
       const account: UserAccount = {
         id: `account-${employeeId}-${Date.now().toString(36)}`,
         employeeId,
@@ -251,7 +280,7 @@ export function AccessControlProvider({ children }: { children: ReactNode }) {
         status: "Active",
         siteIds,
         passwordHash: hashPassword(tempPassword),
-        mustChangePassword: true,
+        mustChangePassword: !password,
         failedLoginAttempts: 0,
         createdOn: new Date().toISOString().slice(0, 10),
       };

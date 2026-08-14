@@ -6,7 +6,7 @@ interface StatCardProps {
   label: string;
   value: string;
   icon: LucideIcon;
-  tone: "indigo" | "emerald" | "amber" | "rose";
+  tone: "indigo" | "emerald" | "amber" | "rose" | "sky";
   trend?: string;
   trendDirection?: "up" | "down";
 }
@@ -16,6 +16,7 @@ const tones = {
   emerald: "bg-emerald-50 text-emerald-600 dark:bg-emerald-500/10 dark:text-emerald-400",
   amber: "bg-amber-50 text-amber-600 dark:bg-amber-500/10 dark:text-amber-400",
   rose: "bg-rose-50 text-rose-600 dark:bg-rose-500/10 dark:text-rose-400",
+  sky: "bg-sky-50 text-sky-600 dark:bg-sky-500/10 dark:text-sky-400",
 };
 
 export function StatCard({

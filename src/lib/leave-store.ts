@@ -1,16 +1,16 @@
 "use client";
 
 import { createLocalStorageStore } from "@/lib/local-store";
-import { seedLeaveAuditEntries, seedLeaveBalances, seedLeaveRequests } from "@/lib/leave-data";
 import type { LeaveAuditEntry, LeaveBalance, LeaveRequest } from "@/lib/types";
 
 /**
  * Plain (non-React) persistence for leave requests, balances and their audit
- * trail, mirroring org-store.ts / rbac-store.ts.
+ * trail, mirroring org-store.ts / rbac-store.ts. Real product starts with
+ * zero leave records — see demo-seed.ts for the optional rich dataset.
  */
-export const leaveRequestsStore = createLocalStorageStore<LeaveRequest[]>("hrms_leave_requests", seedLeaveRequests);
-export const leaveBalancesStore = createLocalStorageStore<LeaveBalance[]>("hrms_leave_balances", seedLeaveBalances);
-export const leaveAuditStore = createLocalStorageStore<LeaveAuditEntry[]>("hrms_leave_audit", seedLeaveAuditEntries);
+export const leaveRequestsStore = createLocalStorageStore<LeaveRequest[]>("hrms_leave_requests", []);
+export const leaveBalancesStore = createLocalStorageStore<LeaveBalance[]>("hrms_leave_balances", []);
+export const leaveAuditStore = createLocalStorageStore<LeaveAuditEntry[]>("hrms_leave_audit", []);
 
 export function logLeaveAudit(entry: Omit<LeaveAuditEntry, "id" | "timestamp">) {
   const record: LeaveAuditEntry = {

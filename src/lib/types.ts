@@ -1,5 +1,44 @@
 export type EmployeeStatus = "Active" | "Inactive";
 
+/**
+ * Finer-grained lifecycle stage, additive alongside `status` — `status`
+ * stays the binary flag every existing eligibility check (attendance,
+ * payroll, dropdowns) already relies on; this captures the HR-visible detail
+ * without changing what "Active" means anywhere that already reads it.
+ */
+export type EmploymentStage = "Probation" | "Confirmed" | "On Notice" | "Exited";
+
+export type Gender = "Male" | "Female" | "Other";
+export type MaritalStatus = "Single" | "Married" | "Other";
+
+export interface EmergencyContact {
+  id: string;
+  name: string;
+  relationship: string;
+  phone: string;
+  alternatePhone?: string;
+  address?: string;
+}
+
+export interface Nominee {
+  id: string;
+  name: string;
+  relationship: string;
+  dateOfBirth?: string;
+  /** % share of benefits — the Nominee tab validates these sum to 100 across an employee's nominees. */
+  percentage: number;
+  contact?: string;
+}
+
+export interface WorkExperience {
+  id: string;
+  company: string;
+  designation: string;
+  startDate: string;
+  endDate?: string;
+  responsibilities?: string;
+}
+
 export interface Employee {
   id: string;
   employeeId: string;
@@ -12,6 +51,8 @@ export interface Employee {
   reportingTo?: string;
   location: string;
   dateOfJoining: string;
+  /** Optional — no current form captures this yet, so it's typically unset. */
+  dateOfBirth?: string;
   skills?: string[];
   education?: { degree: string; school: string; years: string }[];
   siteId: string;
@@ -27,19 +68,127 @@ export interface Employee {
   companyId?: string;
   businessUnitId?: string;
   departmentId?: string;
+  subDepartmentId?: string;
+  designationId?: string;
+  gradeId?: string;
   locationId?: string;
   plantId?: string;
   costCenterId?: string;
   profitCenterId?: string;
+  shiftId?: string;
+  /** References the EmploymentType / EmployeeType Masters (see master-data.ts) — resolved on demand, no duplicate string field. */
+  employmentTypeId?: string;
+  employeeTypeId?: string;
+  /**
+   * True for employee records that exist only to back an administrative
+   * login (e.g. a Site Admin created during site onboarding) rather than a
+   * real headcount hire. Excluded from employee directory lists/counts by
+   * default (see employee-context.tsx) but still fully resolvable by id for
+   * login/profile purposes — mirrors how Super Admin isn't a site employee
+   * at all.
+   */
+  isAdminAccount?: boolean;
+
+  /* ---------------- Personal information (all optional/additive) ------- */
+  firstName?: string;
+  lastName?: string;
+  profilePhotoUrl?: string;
+  gender?: Gender;
+  maritalStatus?: MaritalStatus;
+  personalEmail?: string;
+  alternatePhone?: string;
+  addressLine1?: string;
+  city?: string;
+  state?: string;
+  country?: string;
+  pincode?: string;
+
+  /* ---------------- Employment lifecycle -------------------------------- */
+  employmentStage?: EmploymentStage;
+  confirmationDate?: string;
+  probationPeriodMonths?: number;
+
+  /* ---------------- Statutory (storage only — no calculations here) ----- */
+  pan?: string;
+  pfNumber?: string;
+  uan?: string;
+  esiNumber?: string;
+
+  /* ---------------- Repeatable records ----------------------------------- */
+  emergencyContacts?: EmergencyContact[];
+  nominees?: Nominee[];
+  previousExperience?: WorkExperience[];
+}
+
+/* ------------------------------------------------------------------ */
+/* Employee bank details — one record per employee, real store-backed  */
+/* (not the old shared mock helper). Sensitive: gated by payroll.bank. */
+/* ------------------------------------------------------------------ */
+
+export type BankAccountType = "Savings" | "Current";
+
+export interface EmployeeBankDetail {
+  id: string;
+  employeeId: string;
+  siteId: string;
+  accountHolderName: string;
+  bankName: string;
+  accountNumber: string;
+  ifsc: string;
+  branch: string;
+  accountType: BankAccountType;
+  updatedOn: string;
+  updatedBy?: string;
+}
+
+/* ------------------------------------------------------------------ */
+/* Employee documents — real per-employee records, not the mock        */
+/* generator. Always keyed by employeeId + siteId.                     */
+/* ------------------------------------------------------------------ */
+
+export type EmployeeDocumentStatus = "Pending" | "Verified" | "Rejected";
+
+export interface EmployeeDocumentRecord {
+  id: string;
+  employeeId: string;
+  siteId: string;
+  documentType: string;
+  documentNumber?: string;
+  issueDate?: string;
+  expiryDate?: string;
+  /** Filename/reference only — no real file upload/storage in this mock environment. */
+  fileRef?: string;
+  status: EmployeeDocumentStatus;
+  uploadedOn: string;
+  verifiedBy?: string;
+  verifiedOn?: string;
 }
 
 export type SiteStatus = "Active" | "Trial" | "Suspended";
 export type PackagePlan = "Starter" | "Professional" | "Enterprise";
 
+export const siteTypes = [
+  "Corporate Office",
+  "Manufacturing Plant",
+  "Branch Office",
+  "Warehouse",
+  "Retail Outlet",
+  "Other",
+] as const;
+export type SiteType = (typeof siteTypes)[number];
+
 export interface Site {
   id: string;
   name: string;
   code: string;
+  /** Registered legal entity name, if different from the trading/site name. */
+  legalName?: string;
+  siteType?: SiteType;
+  industry?: string;
+  email?: string;
+  phone?: string;
+  timezone?: string;
+  currency?: string;
   logoColor: string;
   addressLine1: string;
   city: string;
@@ -52,6 +201,56 @@ export interface Site {
   adminEmail: string;
   adminPhone: string;
   createdOn: string;
+  /** Set once the 5-step onboarding wizard has been completed for this site. */
+  onboardingCompletedOn?: string;
+}
+
+/* ------------------------------------------------------------------ */
+/* Site onboarding — initial per-site operational configuration        */
+/* Captured in Step 4 of the onboarding wizard. Distinct from the       */
+/* global AppSettings (organization branding/email/integrations) —     */
+/* this is day-to-day HR configuration scoped to a single site.        */
+/* ------------------------------------------------------------------ */
+
+export type PayFrequency = "Monthly" | "Bi-Weekly" | "Weekly";
+export type LeaveApprovalMode = "Manager" | "HR" | "Manager then HR";
+
+export interface SiteAttendanceConfig {
+  workingDays: string[];
+  weeklyOff: string[];
+  defaultShiftId?: string;
+  gracePeriodMinutes: number;
+  lateComingRule: string;
+  earlyGoingRule: string;
+  overtimeEnabled: boolean;
+}
+
+export interface SiteLeaveConfig {
+  enabledLeaveTypes: string[];
+  approvalMode: LeaveApprovalMode;
+  carryForwardEnabled: boolean;
+  carryForwardMaxDays: number;
+}
+
+export interface SitePayrollConfig {
+  frequency: PayFrequency;
+  payCycleStartDay: number;
+  processingDay: number;
+  defaultComponents: string[];
+}
+
+export interface SiteHolidayConfig {
+  calendarName: string;
+  holidays: { name: string; date: string }[];
+}
+
+export interface SiteOnboardingConfig {
+  siteId: string;
+  attendance: SiteAttendanceConfig;
+  leave: SiteLeaveConfig;
+  payroll: SitePayrollConfig;
+  holiday: SiteHolidayConfig;
+  updatedOn: string;
 }
 
 
@@ -309,8 +508,15 @@ export interface MasterAuditEntry {
   timestamp: string;
 }
 
-export type LeaveStatus = "Approved" | "Pending" | "Rejected";
-export type LeaveType = "Casual Leave" | "Sick Leave" | "Earned Leave" | "Comp Off";
+export type LeaveStatus = "Approved" | "Pending" | "Rejected" | "Cancelled";
+/**
+ * Historically a fixed 4-value union; widened to `string` so it can hold any
+ * site-configured "LeaveType" Master record name (see master-data.ts). Kept
+ * as a plain string (display convenience, mirrors `employee` alongside
+ * `employeeId`) — `leaveTypeId` below is the canonical reference.
+ */
+export type LeaveType = string;
+export type HalfDayPortion = "First Half" | "Second Half";
 
 export interface LeaveRequest {
   id: string;
@@ -318,11 +524,18 @@ export interface LeaveRequest {
   employeeId: string;
   employee: string;
   type: LeaveType;
+  /** Canonical link to the site-scoped "LeaveType" Master record — resolves paid/unpaid and other policy fields. Optional for backward compatibility with pre-Phase-8 records. */
+  leaveTypeId?: string;
   from: string;
   to: string;
+  /** Only meaningful when `from === to` — a single half-day request. */
+  halfDay?: HalfDayPortion;
   days: number;
   status: LeaveStatus;
   reason: string;
+  contactDuringLeave?: string;
+  emergencyContact?: string;
+  attachmentRef?: string;
   siteId?: string;
   appliedOn: string;
   approverId?: string;
@@ -330,16 +543,27 @@ export interface LeaveRequest {
   /** Required on reject; an optional note on approve. */
   decisionReason?: string;
   decidedOn?: string;
+  cancelledBy?: string;
+  cancelledOn?: string;
+  cancellationReason?: string;
 }
 
 export interface LeaveBalance {
   employeeId: string;
   type: LeaveType;
+  leaveTypeId?: string;
   used: number;
+  /** Base annual entitlement — unchanged meaning from the pre-Phase-8 model. */
   total: number;
+  /** Explicit opening balance for the current cycle; defaults to `total` when unset. */
+  opening?: number;
+  /** Additional days accrued mid-cycle (e.g. monthly accrual policies), on top of `opening`. */
+  accrued?: number;
+  /** Days carried forward from the previous cycle, on top of `opening`. */
+  carryForward?: number;
 }
 
-export type LeaveAuditAction = "applied" | "approved" | "rejected";
+export type LeaveAuditAction = "applied" | "approved" | "rejected" | "cancelled";
 
 export interface LeaveAuditEntry {
   id: string;
@@ -355,9 +579,11 @@ export type AttendanceStatus =
   | "Present"
   | "Absent"
   | "Half Day"
+  | "Late"
   | "On Leave"
+  | "Weekend"
   | "Holiday"
-  | "Weekend";
+  | "Missing Punch";
 
 export interface AttendanceDay {
   date: number;
@@ -376,6 +602,38 @@ export interface AttendanceReportRow {
 }
 
 /* ------------------------------------------------------------------ */
+/* Attendance records                                                   */
+/* One row per employee per date. Site-isolated via siteId; always      */
+/* resolved through employeeId (never by name) — see employee-store.ts. */
+/* ------------------------------------------------------------------ */
+
+export type AttendanceSource = "MANUAL" | "BIOMETRIC" | "MOBILE" | "IMPORT" | "API" | "SYSTEM";
+
+export interface AttendanceRecord {
+  id: string;
+  employeeId: string;
+  siteId: string;
+  date: string;
+  punchIn?: string;
+  punchOut?: string;
+  status: AttendanceStatus;
+  shiftId?: string;
+  workedHours: number;
+  overtimeHours: number;
+  lateMinutes: number;
+  earlyLeavingMinutes: number;
+  source: AttendanceSource;
+  remarks?: string;
+  /** Set only when this record was created or overwritten by the Leave module's approval sync — see leave-context.tsx. Lets a later cancellation revert exactly what it touched. */
+  leaveRequestId?: string;
+  /** Snapshot of this record's state immediately before a leave sync overwrote it, so cancelling the leave can restore real attendance data instead of destroying it. Absent when the sync created the record from scratch (cancel then deletes it). */
+  preLeaveSnapshot?: Pick<AttendanceRecord, "status" | "punchIn" | "punchOut" | "workedHours" | "overtimeHours" | "lateMinutes" | "earlyLeavingMinutes">;
+  createdOn: string;
+  updatedOn: string;
+  updatedBy?: string;
+}
+
+/* ------------------------------------------------------------------ */
 /* Attendance Regularization                                           */
 /* ------------------------------------------------------------------ */
 
@@ -388,6 +646,10 @@ export interface AttendanceRegularization {
   date: string;
   currentStatus: AttendanceStatus;
   requestedStatus: AttendanceStatus;
+  /** The specific attendance record this request would correct, once one exists for the date. */
+  attendanceRecordId?: string;
+  requestedPunchIn?: string;
+  requestedPunchOut?: string;
   reason: string;
   status: RegularizationStatus;
   siteId?: string;
@@ -398,17 +660,71 @@ export interface AttendanceRegularization {
   decidedOn?: string;
 }
 
-export interface Payslip {
+/* ------------------------------------------------------------------ */
+/* Payroll — salary structure, monthly runs and generated payslips     */
+/* Reuses Employee (source of truth), AttendanceRecord (LOP/overtime), */
+/* EmployeeLoan (EMI deductions) and SalaryComponent masters (rates) — */
+/* no parallel data source. Site-isolated via siteId throughout.       */
+/* ------------------------------------------------------------------ */
+
+export interface SalaryLine {
+  componentId: string;
+  label: string;
+  amount: number;
+}
+
+export interface EmployeeSalaryStructure {
   id: string;
-  month: string;
-  employee: string;
   employeeId: string;
-  designation: string;
-  paymentDate: string;
-  bankName: string;
-  bankAccount: string;
-  earnings: { label: string; amount: number }[];
-  deductions: { label: string; amount: number }[];
+  siteId: string;
+  effectiveFrom: string;
+  ctcAnnual: number;
+  /** Monthly recurring earnings (Basic, HRA, allowances) — LOP/overtime are computed per payroll run, not stored here. */
+  earnings: SalaryLine[];
+  /** Monthly recurring deductions (PF, Professional Tax, ...) — loan EMI is computed per run from the Loans store. */
+  deductions: SalaryLine[];
+  grossMonthly: number;
+  updatedOn: string;
+  updatedBy?: string;
+}
+
+export type PayrollRunStatus = "Processing" | "Approved" | "Locked";
+
+export interface PayrollRun {
+  id: string;
+  siteId: string;
+  /** YYYY-MM */
+  month: string;
+  status: PayrollRunStatus;
+  employeeCount: number;
+  totalGross: number;
+  totalDeductions: number;
+  totalNet: number;
+  createdOn: string;
+  createdBy: string;
+  approvedOn?: string;
+  approvedBy?: string;
+  lockedOn?: string;
+  lockedBy?: string;
+}
+
+export interface PayrollPayslip {
+  id: string;
+  runId: string;
+  employeeId: string;
+  siteId: string;
+  month: string;
+  earnings: SalaryLine[];
+  deductions: SalaryLine[];
+  workingDays: number;
+  paidDays: number;
+  lopDays: number;
+  overtimeHours: number;
+  overtimeAmount: number;
+  grossEarnings: number;
+  totalDeductions: number;
+  netPay: number;
+  generatedOn: string;
 }
 
 /* ------------------------------------------------------------------ */

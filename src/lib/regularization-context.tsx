@@ -9,7 +9,8 @@ import {
   type ReactNode,
 } from "react";
 import { regularizationsStore } from "@/lib/regularization-store";
-import { employees } from "@/lib/mock-data";
+import { attendanceStore, findAttendanceRecord } from "@/lib/attendance-store";
+import { employeesStore } from "@/lib/employee-store";
 import { useAccessControl } from "@/lib/access-control-context";
 import type { AttendanceRegularization, AttendanceStatus } from "@/lib/types";
 
@@ -22,6 +23,8 @@ interface ApplyRegularizationInput {
   date: string;
   currentStatus: AttendanceStatus;
   requestedStatus: AttendanceStatus;
+  requestedPunchIn?: string;
+  requestedPunchOut?: string;
   reason: string;
 }
 
@@ -46,6 +49,14 @@ export function RegularizationProvider({ children }: { children: ReactNode }) {
     regularizationsStore.subscribe,
     regularizationsStore.getSnapshot,
     regularizationsStore.getServerSnapshot,
+  );
+  // Plain-module subscription (no EmployeeProvider dependency needed — see
+  // employee-store.ts), so reporting-line scoping stays live without a
+  // provider cycle, the same pattern used in access-control-context.tsx.
+  const employees = useSyncExternalStore(
+    employeesStore.subscribe,
+    employeesStore.getSnapshot,
+    employeesStore.getServerSnapshot,
   );
 
   const requestsFor = useCallback(
@@ -89,6 +100,7 @@ export function RegularizationProvider({ children }: { children: ReactNode }) {
       if (alreadyPending) {
         return { ok: false, message: `A regularization request for ${input.date} is already pending.` };
       }
+      const existingRecord = findAttendanceRecord(currentUser.employeeId, input.date);
       const request: AttendanceRegularization = {
         id: `reg-${Date.now().toString(36)}`,
         employeeId: currentUser.employeeId,
@@ -96,6 +108,9 @@ export function RegularizationProvider({ children }: { children: ReactNode }) {
         date: input.date,
         currentStatus: input.currentStatus,
         requestedStatus: input.requestedStatus,
+        attendanceRecordId: existingRecord?.id,
+        requestedPunchIn: input.requestedPunchIn,
+        requestedPunchOut: input.requestedPunchOut,
         reason: input.reason,
         status: "Pending",
         siteId: currentUser.siteId,
@@ -115,6 +130,51 @@ export function RegularizationProvider({ children }: { children: ReactNode }) {
       if (!canDecide(request)) return { ok: false, message: "You're not authorized to decide this request." };
       if (status === "Rejected" && !decisionReason?.trim()) {
         return { ok: false, message: "A reason is required to reject a regularization request." };
+      }
+
+      if (status === "Approved") {
+        const now = new Date().toISOString();
+        const existing = attendanceStore.getSnapshot().find((r) => r.id === request.attendanceRecordId) ??
+          findAttendanceRecord(request.employeeId, request.date);
+        if (existing) {
+          attendanceStore.set(
+            attendanceStore.getSnapshot().map((r) =>
+              r.id === existing.id
+                ? {
+                    ...r,
+                    status: request.requestedStatus,
+                    punchIn: request.requestedPunchIn ?? r.punchIn,
+                    punchOut: request.requestedPunchOut ?? r.punchOut,
+                    remarks: `Corrected via regularization: ${request.reason}`,
+                    updatedOn: now,
+                    updatedBy: currentUser.name,
+                  }
+                : r,
+            ),
+          );
+        } else if (request.siteId) {
+          attendanceStore.set([
+            {
+              id: `att-${request.employeeId}-${request.date}-${Date.now().toString(36)}`,
+              employeeId: request.employeeId,
+              siteId: request.siteId,
+              date: request.date,
+              punchIn: request.requestedPunchIn,
+              punchOut: request.requestedPunchOut,
+              status: request.requestedStatus,
+              workedHours: 0,
+              overtimeHours: 0,
+              lateMinutes: 0,
+              earlyLeavingMinutes: 0,
+              source: "MANUAL",
+              remarks: `Created via regularization: ${request.reason}`,
+              createdOn: now,
+              updatedOn: now,
+              updatedBy: currentUser.name,
+            },
+            ...attendanceStore.getSnapshot(),
+          ]);
+        }
       }
 
       regularizationsStore.set(

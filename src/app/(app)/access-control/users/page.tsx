@@ -15,13 +15,14 @@ import { Can } from "@/components/auth/permission-gate";
 import { useAccessControl } from "@/lib/access-control-context";
 import { useSite } from "@/lib/site-context";
 import { useNow } from "@/lib/use-now";
-import { employees } from "@/lib/mock-data";
+import { useEmployees } from "@/lib/employee-context";
 import { downloadCsv } from "@/lib/utils";
 import type { AccountStatus } from "@/lib/types";
 
 export default function AccessControlUsersPage() {
   const { accounts, roles, createAccount, setAccountRoles, setAccountStatus, unlockAccount } = useAccessControl();
   const { sites } = useSite();
+  const { employees } = useEmployees();
   const now = useNow();
 
   const [search, setSearch] = useState("");

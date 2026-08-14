@@ -1,11 +1,11 @@
 "use client";
 
 import { createLocalStorageStore } from "@/lib/local-store";
-import { seedOnboardingAudit, seedOnboardingCases } from "@/lib/onboarding-data";
 import type { OnboardingAuditEntry, OnboardingCase } from "@/lib/types";
 
-export const onboardingCasesStore = createLocalStorageStore<OnboardingCase[]>("hrms_onboarding_cases", seedOnboardingCases);
-export const onboardingAuditStore = createLocalStorageStore<OnboardingAuditEntry[]>("hrms_onboarding_audit", seedOnboardingAudit);
+// Real product starts with zero onboarding cases — see demo-seed.ts for the optional rich dataset.
+export const onboardingCasesStore = createLocalStorageStore<OnboardingCase[]>("hrms_onboarding_cases", []);
+export const onboardingAuditStore = createLocalStorageStore<OnboardingAuditEntry[]>("hrms_onboarding_audit", []);
 
 export function logOnboardingAudit(entry: Omit<OnboardingAuditEntry, "id" | "timestamp">) {
   const record: OnboardingAuditEntry = {
