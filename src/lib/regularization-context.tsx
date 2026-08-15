@@ -12,6 +12,7 @@ import { regularizationsStore } from "@/lib/regularization-store";
 import { attendanceStore, findAttendanceRecord } from "@/lib/attendance-store";
 import { employeesStore } from "@/lib/employee-store";
 import { useAccessControl } from "@/lib/access-control-context";
+import { useApprovals } from "@/lib/approval-context";
 import type { AttendanceRegularization, AttendanceStatus } from "@/lib/types";
 
 interface ActionResult {
@@ -44,6 +45,7 @@ const RegularizationContext = createContext<RegularizationContextValue | undefin
 
 export function RegularizationProvider({ children }: { children: ReactNode }) {
   const { currentUser, canFeature } = useAccessControl();
+  const { recordMirroredAction } = useApprovals();
 
   const regularizations = useSyncExternalStore(
     regularizationsStore.subscribe,
@@ -77,7 +79,7 @@ export function RegularizationProvider({ children }: { children: ReactNode }) {
       const requester = employees.find((e) => e.employeeId === request.employeeId);
       return requester?.reportingManagerId === currentUser.employeeId;
     },
-    [currentUser.employeeId, canFeature, hasBroadScope],
+    [currentUser.employeeId, canFeature, hasBroadScope, employees],
   );
 
   const visibleTeamRequests = useCallback(() => {
@@ -87,7 +89,7 @@ export function RegularizationProvider({ children }: { children: ReactNode }) {
       employees.filter((e) => e.reportingManagerId === currentUser.employeeId).map((e) => e.employeeId),
     );
     return regularizations.filter((r) => directReportIds.has(r.employeeId));
-  }, [regularizations, currentUser.employeeId, hasBroadScope, canFeature]);
+  }, [regularizations, currentUser.employeeId, hasBroadScope, canFeature, employees]);
 
   const applyRegularization = useCallback(
     (input: ApplyRegularizationInput): ActionResult => {
@@ -117,9 +119,22 @@ export function RegularizationProvider({ children }: { children: ReactNode }) {
         appliedOn: new Date().toISOString().slice(0, 10),
       };
       regularizationsStore.set([request, ...regularizationsStore.getSnapshot()]);
+      // Mirror into the shared approval instance/audit trail (Phase 9) —
+      // purely observational, this module keeps its own authorization above.
+      recordMirroredAction({
+        siteId: request.siteId ?? currentUser.siteId,
+        module: "Regularization",
+        recordId: request.id,
+        recordOwnerEmployeeId: request.employeeId,
+        recordOwnerName: request.employee,
+        approverType: "REPORTING_MANAGER",
+        action: "APPLY",
+        newStatus: "Pending",
+        timestamp: new Date().toISOString(),
+      });
       return { ok: true, message: `Regularization request submitted for ${input.date}.` };
     },
-    [currentUser.employeeId, currentUser.name, currentUser.siteId],
+    [currentUser.employeeId, currentUser.name, currentUser.siteId, recordMirroredAction],
   );
 
   const decide = useCallback(
@@ -192,6 +207,18 @@ export function RegularizationProvider({ children }: { children: ReactNode }) {
         ),
       );
 
+      recordMirroredAction({
+        siteId: request.siteId ?? currentUser.siteId,
+        module: "Regularization",
+        recordId: id,
+        recordOwnerEmployeeId: request.employeeId,
+        recordOwnerName: request.employee,
+        approverType: hasBroadScope ? "HR" : "REPORTING_MANAGER",
+        action: status === "Approved" ? "APPROVE" : "REJECT",
+        newStatus: status,
+        comment: decisionReason,
+      });
+
       return {
         ok: true,
         message:
@@ -200,7 +227,7 @@ export function RegularizationProvider({ children }: { children: ReactNode }) {
             : `Rejected ${request.employee}'s regularization for ${request.date}.`,
       };
     },
-    [canDecide, currentUser.employeeId, currentUser.name],
+    [canDecide, currentUser.employeeId, currentUser.name, currentUser.siteId, hasBroadScope, recordMirroredAction],
   );
 
   const approveRegularization = useCallback((id: string, note?: string) => decide(id, "Approved", note), [decide]);

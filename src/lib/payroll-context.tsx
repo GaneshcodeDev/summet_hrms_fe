@@ -29,6 +29,7 @@ import { useMasters } from "@/lib/master-context";
 import { useSiteConfig } from "@/lib/site-config-context";
 import { useLeave } from "@/lib/leave-context";
 import { computeLeaveDaysForPayroll } from "@/lib/leave-engine";
+import { useApprovals } from "@/lib/approval-context";
 import type {
   EmployeeLoan,
   EmployeeSalaryStructure,
@@ -116,6 +117,7 @@ const PayrollContext = createContext<PayrollContextValue | undefined>(undefined)
 
 export function PayrollProvider({ children }: { children: ReactNode }) {
   const { currentUser, canFeature } = useAccessControl();
+  const { recordMirroredAction } = useApprovals();
 
   const loans = useSyncExternalStore(
     employeeLoansStore.subscribe,
@@ -172,9 +174,19 @@ export function PayrollProvider({ children }: { children: ReactNode }) {
         appliedOn: new Date().toISOString().slice(0, 10),
       };
       employeeLoansStore.set([loan, ...employeeLoansStore.getSnapshot()]);
+      recordMirroredAction({
+        siteId: loan.siteId ?? currentUser.siteId,
+        module: "Loan",
+        recordId: loan.id,
+        recordOwnerEmployeeId: loan.employeeId,
+        recordOwnerName: loan.employee,
+        approverType: "PAYROLL_ADMIN",
+        action: "APPLY",
+        newStatus: "Pending",
+      });
       return { ok: true, message: `${input.type} request for ₹${input.principalAmount.toLocaleString("en-IN")} submitted.` };
     },
-    [currentUser.employeeId, currentUser.name, currentUser.siteId],
+    [currentUser.employeeId, currentUser.name, currentUser.siteId, recordMirroredAction],
   );
 
   const decideLoan = useCallback(
@@ -183,6 +195,12 @@ export function PayrollProvider({ children }: { children: ReactNode }) {
       if (!loan) return { ok: false, message: "Loan request not found." };
       if (loan.status !== "Pending") return { ok: false, message: "This request has already been decided." };
       if (!canDecideLoans) return { ok: false, message: "You're not authorized to decide loan requests." };
+      // Phase 9: canDecideLoans alone never checked whose request this is —
+      // a Payroll Admin could approve their own loan. Block that regardless
+      // of how broad their permissions are (spec section 14).
+      if (loan.employeeId === currentUser.employeeId) {
+        return { ok: false, message: "You can't decide your own loan request." };
+      }
       if (status === "Rejected" && !reason?.trim()) {
         return { ok: false, message: "A reason is required to reject a loan request." };
       }
@@ -200,6 +218,17 @@ export function PayrollProvider({ children }: { children: ReactNode }) {
             : l,
         ),
       );
+      recordMirroredAction({
+        siteId: loan.siteId ?? currentUser.siteId,
+        module: "Loan",
+        recordId: id,
+        recordOwnerEmployeeId: loan.employeeId,
+        recordOwnerName: loan.employee,
+        approverType: "PAYROLL_ADMIN",
+        action: status === "Approved" ? "APPROVE" : "REJECT",
+        newStatus: status === "Approved" ? "Approved" : "Rejected",
+        comment: reason,
+      });
       return {
         ok: true,
         message:
@@ -208,7 +237,7 @@ export function PayrollProvider({ children }: { children: ReactNode }) {
             : `Rejected ${loan.employee}'s ${loan.type} request.`,
       };
     },
-    [canDecideLoans, currentUser.employeeId, currentUser.name],
+    [canDecideLoans, currentUser.employeeId, currentUser.name, currentUser.siteId, recordMirroredAction],
   );
 
   const submitTaxDeclaration = useCallback(
@@ -443,9 +472,27 @@ export function PayrollProvider({ children }: { children: ReactNode }) {
       };
       payslipsStore.set([...newPayslips, ...payslipsStore.getSnapshot()]);
       payrollRunsStore.set([run, ...payrollRunsStore.getSnapshot()]);
+      // Mirrors the existing Processing → Approved → Locked chain into the
+      // shared audit trail (section 12) — purely observational, this
+      // module's own canProcessPayroll/canApprovePayroll keep gating exactly
+      // as before, and a Locked run still can't be edited.
+      recordMirroredAction({
+        siteId,
+        module: "Payroll",
+        recordId: runId,
+        recordOwnerEmployeeId: currentUser.employeeId,
+        recordOwnerName: currentUser.name,
+        approverType: "PAYROLL_ADMIN",
+        action: "APPLY",
+        newStatus: "Pending",
+        steps: [
+          { order: 0, approverType: "PAYROLL_ADMIN", required: true },
+          { order: 1, approverType: "PAYROLL_ADMIN", required: true },
+        ],
+      });
       return { ok: true, message: `Payroll processed for ${month} — ${newPayslips.length} payslip(s) generated.`, run };
     },
-    [canProcessPayroll, previewPayrollRun, currentUser.name],
+    [canProcessPayroll, previewPayrollRun, currentUser.name, currentUser.employeeId, recordMirroredAction],
   );
 
   const approvePayrollRun = useCallback(
@@ -459,9 +506,21 @@ export function PayrollProvider({ children }: { children: ReactNode }) {
           .getSnapshot()
           .map((r) => (r.id === id ? { ...r, status: "Approved" as const, approvedOn: new Date().toISOString(), approvedBy: currentUser.name } : r)),
       );
+      recordMirroredAction({
+        siteId: run.siteId,
+        module: "Payroll",
+        recordId: id,
+        recordOwnerEmployeeId: currentUser.employeeId,
+        recordOwnerName: currentUser.name,
+        approverType: "PAYROLL_ADMIN",
+        action: "APPROVE",
+        newStatus: "Pending",
+        stepOrder: 0,
+        advanceToNextStep: true,
+      });
       return { ok: true, message: `Payroll run for ${run.month} approved.` };
     },
-    [canApprovePayroll, currentUser.name],
+    [canApprovePayroll, currentUser.name, currentUser.employeeId, recordMirroredAction],
   );
 
   const lockPayrollRun = useCallback(
@@ -495,9 +554,21 @@ export function PayrollProvider({ children }: { children: ReactNode }) {
           .getSnapshot()
           .map((r) => (r.id === id ? { ...r, status: "Locked" as const, lockedOn: new Date().toISOString(), lockedBy: currentUser.name } : r)),
       );
+      recordMirroredAction({
+        siteId: run.siteId,
+        module: "Payroll",
+        recordId: id,
+        recordOwnerEmployeeId: currentUser.employeeId,
+        recordOwnerName: currentUser.name,
+        approverType: "PAYROLL_ADMIN",
+        action: "APPROVE",
+        newStatus: "Approved",
+        stepOrder: 1,
+        comment: "Locked",
+      });
       return { ok: true, message: `Payroll run for ${run.month} locked. Loan balances updated.` };
     },
-    [canApprovePayroll, currentUser.name],
+    [canApprovePayroll, currentUser.name, currentUser.employeeId, recordMirroredAction],
   );
 
   const value = useMemo<PayrollContextValue>(

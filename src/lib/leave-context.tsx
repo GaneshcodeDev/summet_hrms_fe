@@ -14,6 +14,8 @@ import { attendanceStore } from "@/lib/attendance-store";
 import { useAccessControl } from "@/lib/access-control-context";
 import { useMasters } from "@/lib/master-context";
 import { useSiteConfig } from "@/lib/site-config-context";
+import { useApprovals } from "@/lib/approval-context";
+import { resolveLeaveWorkflowSteps } from "@/lib/approval-engine";
 import {
   calculateLeaveDays,
   computeLeaveBalanceSummary,
@@ -27,6 +29,7 @@ import {
   type LeaveDayCalc,
 } from "@/lib/leave-engine";
 import type {
+  ApprovalInstance,
   AttendanceRecord,
   HalfDayPortion,
   LeaveAuditEntry,
@@ -75,6 +78,8 @@ interface LeaveContextValue {
   /** Employee: own Pending or future-dated Approved requests. HR/broad-scope: any request in scope. */
   canCancel: (request: LeaveRequest) => boolean;
   cancelLeave: (id: string, reason?: string) => ActionResult;
+  /** The approval workflow instance backing this request, if one was recorded — see approval-context.tsx. */
+  approvalInstanceFor: (requestId: string) => ApprovalInstance | undefined;
 }
 
 const LeaveContext = createContext<LeaveContextValue | undefined>(undefined);
@@ -194,6 +199,7 @@ export function LeaveProvider({ children }: { children: ReactNode }) {
   const { currentUser, canFeature } = useAccessControl();
   const { recordsOfType } = useMasters();
   const { configForSite } = useSiteConfig();
+  const { instanceFor, canAct: canActOnInstance, createInstance, act: actOnInstance, recordMirroredAction } = useApprovals();
 
   const leaveRequests = useSyncExternalStore(
     leaveRequestsStore.subscribe,
@@ -277,11 +283,18 @@ export function LeaveProvider({ children }: { children: ReactNode }) {
     (request: LeaveRequest) => {
       if (request.employeeId === currentUser.employeeId) return false; // no self-approval
       if (!canFeature("leave.requests", "approve") && !canFeature("leave.requests", "reject")) return false;
+      // Genuinely multi-step (Manager then HR) requests defer entirely to the
+      // workflow engine's per-step gate — whose turn it is right now, not
+      // just "am I the manager or HR at all".
+      const instance = instanceFor("Leave", request.id);
+      if (instance && instance.steps.length > 1) {
+        return canActOnInstance(instance, "leave.requests");
+      }
       if (hasBroadScope) return true;
       const requester = employees.find((e) => e.employeeId === request.employeeId);
       return requester?.reportingManagerId === currentUser.employeeId;
     },
-    [currentUser.employeeId, canFeature, hasBroadScope, employees],
+    [currentUser.employeeId, canFeature, hasBroadScope, employees, instanceFor, canActOnInstance],
   );
 
   const canCancel = useCallback(
@@ -390,6 +403,16 @@ export function LeaveProvider({ children }: { children: ReactNode }) {
         actorName: currentUser.name,
         detail: `${leaveType.name} requested for ${days} day(s)`,
       });
+      // Records a real workflow instance for every request (even single-step
+      // ones) so the shared Approval History UI has something to show — only
+      // "Manager then HR" mode actually GATES on it (see canDecide/decide below).
+      const approvalMode = configForSite(siteId)?.leave.approvalMode ?? "Manager";
+      createInstance({
+        siteId,
+        module: "Leave",
+        recordId: request.id,
+        steps: autoApprove ? [] : resolveLeaveWorkflowSteps(approvalMode),
+      });
       if (autoApprove) {
         finalizeApproval(request, siteId, applicableDates, leaveTypesForSite);
         logLeaveAudit({
@@ -407,7 +430,7 @@ export function LeaveProvider({ children }: { children: ReactNode }) {
           : `Leave request submitted for approval (${days} day${days !== 1 ? "s" : ""}).`,
       };
     },
-    [currentUser.employeeId, currentUser.name, currentUser.siteId, leaveTypesForSite, workingConfigFor],
+    [currentUser.employeeId, currentUser.name, currentUser.siteId, leaveTypesForSite, workingConfigFor, configForSite, createInstance],
   );
 
   const decide = useCallback(
@@ -415,10 +438,75 @@ export function LeaveProvider({ children }: { children: ReactNode }) {
       const request = leaveRequestsStore.getSnapshot().find((r) => r.id === id);
       if (!request) return { ok: false, message: "Leave request not found." };
       if (request.status !== "Pending") return { ok: false, message: "This request has already been decided." };
-      if (!canDecide(request)) return { ok: false, message: "You're not authorized to decide this request." };
       if (status === "Rejected" && !decisionReason?.trim()) {
         return { ok: false, message: "A reason is required to reject a leave request." };
       }
+
+      const instance = instanceFor("Leave", id);
+      const isMultiStep = Boolean(instance && instance.steps.length > 1);
+
+      if (isMultiStep && instance) {
+        // Manager-then-HR (or any future multi-step mode): the workflow
+        // engine owns authorization for "whose turn is it" — reject here
+        // never reaches Approved without every step signing off, and an
+        // intermediate approval must NOT flip the leave to Approved (no
+        // Attendance/Payroll effect) until the final step does.
+        const result = actOnInstance("Leave", id, status === "Approved" ? "APPROVE" : "REJECT", "leave.requests", decisionReason);
+        if (!result.ok) return { ok: false, message: result.message };
+
+        if (!result.completed) {
+          logLeaveAudit({
+            leaveRequestId: id,
+            employeeName: request.employee,
+            action: "approved",
+            actorName: currentUser.name,
+            detail: `${request.type} approved at the ${instance.steps[instance.currentStep].approverType} step — awaiting the next approver`,
+          });
+          return { ok: true, message: result.message };
+        }
+
+        const finalStatus: LeaveStatus = result.finalStatus === "Approved" ? "Approved" : "Rejected";
+        leaveRequestsStore.set(
+          leaveRequestsStore.getSnapshot().map((r) =>
+            r.id === id
+              ? {
+                  ...r,
+                  status: finalStatus,
+                  approverId: currentUser.employeeId,
+                  approverName: currentUser.name,
+                  decisionReason: decisionReason?.trim() || undefined,
+                  decidedOn: new Date().toISOString().slice(0, 10),
+                }
+              : r,
+          ),
+        );
+        if (finalStatus === "Approved") {
+          const siteId = request.siteId ?? currentUser.siteId;
+          const { workingDays, holidays } = workingConfigFor(siteId);
+          const { applicableDates } = calculateLeaveDays(request.from, request.to, workingDays, holidays, request.halfDay);
+          finalizeApproval(request, siteId, applicableDates, leaveTypesForSite);
+        }
+        logLeaveAudit({
+          leaveRequestId: id,
+          employeeName: request.employee,
+          action: finalStatus === "Approved" ? "approved" : "rejected",
+          actorName: currentUser.name,
+          detail:
+            finalStatus === "Approved"
+              ? `${request.type} fully approved for ${request.days} day(s)${decisionReason ? ` — ${decisionReason}` : ""}`
+              : `${request.type} rejected — ${decisionReason}`,
+        });
+        return {
+          ok: true,
+          message:
+            finalStatus === "Approved"
+              ? `Approved ${request.employee}'s ${request.type} request.`
+              : `Rejected ${request.employee}'s ${request.type} request.`,
+        };
+      }
+
+      // Single-step (Manager / HR / auto-approve modes) — unchanged from Phase 8.
+      if (!canDecide(request)) return { ok: false, message: "You're not authorized to decide this request." };
 
       leaveRequestsStore.set(
         leaveRequestsStore.getSnapshot().map((r) =>
@@ -442,6 +530,20 @@ export function LeaveProvider({ children }: { children: ReactNode }) {
         finalizeApproval(request, siteId, applicableDates, leaveTypesForSite);
       }
 
+      if (instance) {
+        recordMirroredAction({
+          siteId: request.siteId ?? currentUser.siteId,
+          module: "Leave",
+          recordId: id,
+          recordOwnerEmployeeId: request.employeeId,
+          recordOwnerName: request.employee,
+          approverType: instance.steps[0]?.approverType ?? "REPORTING_MANAGER",
+          action: status === "Approved" ? "APPROVE" : "REJECT",
+          newStatus: status,
+          comment: decisionReason,
+        });
+      }
+
       logLeaveAudit({
         leaveRequestId: id,
         employeeName: request.employee,
@@ -461,7 +563,17 @@ export function LeaveProvider({ children }: { children: ReactNode }) {
             : `Rejected ${request.employee}'s ${request.type} request.`,
       };
     },
-    [canDecide, currentUser.employeeId, currentUser.name, currentUser.siteId, workingConfigFor, leaveTypesForSite],
+    [
+      canDecide,
+      currentUser.employeeId,
+      currentUser.name,
+      currentUser.siteId,
+      workingConfigFor,
+      leaveTypesForSite,
+      instanceFor,
+      actOnInstance,
+      recordMirroredAction,
+    ],
   );
 
   const approveLeave = useCallback((id: string, note?: string) => decide(id, "Approved", note), [decide]);
@@ -505,6 +617,25 @@ export function LeaveProvider({ children }: { children: ReactNode }) {
             : r,
         ),
       );
+      // canCancel() above is already the authoritative gate (self, or
+      // HR/broad-scope) — mirror the outcome into the instance rather than
+      // re-authorizing through actOnInstance's stricter per-step check,
+      // which doesn't know about the "HR can always cancel" fallback.
+      const instance = instanceFor("Leave", id);
+      if (instance && instance.status !== "Cancelled") {
+        recordMirroredAction({
+          siteId: request.siteId ?? currentUser.siteId,
+          module: "Leave",
+          recordId: id,
+          recordOwnerEmployeeId: request.employeeId,
+          recordOwnerName: request.employee,
+          approverType: instance.steps[instance.currentStep]?.approverType ?? instance.steps[0]?.approverType ?? "REPORTING_MANAGER",
+          action: "CANCEL",
+          newStatus: "Cancelled",
+          comment: reason,
+        });
+      }
+
       logLeaveAudit({
         leaveRequestId: id,
         employeeName: request.employee,
@@ -514,8 +645,10 @@ export function LeaveProvider({ children }: { children: ReactNode }) {
       });
       return { ok: true, message: "Leave request cancelled." };
     },
-    [canCancel, currentUser.name],
+    [canCancel, currentUser.name, currentUser.siteId, instanceFor, recordMirroredAction],
   );
+
+  const approvalInstanceFor = useCallback((requestId: string) => instanceFor("Leave", requestId), [instanceFor]);
 
   const value = useMemo<LeaveContextValue>(
     () => ({
@@ -534,6 +667,7 @@ export function LeaveProvider({ children }: { children: ReactNode }) {
       rejectLeave,
       canCancel,
       cancelLeave,
+      approvalInstanceFor,
     }),
     [
       leaveRequests,
@@ -551,6 +685,7 @@ export function LeaveProvider({ children }: { children: ReactNode }) {
       rejectLeave,
       canCancel,
       cancelLeave,
+      approvalInstanceFor,
     ],
   );
 

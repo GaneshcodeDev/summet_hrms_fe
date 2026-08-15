@@ -1,7 +1,7 @@
 "use client";
 
 import { FormEvent, useMemo, useState } from "react";
-import { Check, Plus, X, XCircle } from "lucide-react";
+import { Check, History, Plus, X, XCircle } from "lucide-react";
 import { PageHeader } from "@/components/layout/page-header";
 import { Card } from "@/components/ui/card";
 import { Button } from "@/components/ui/button";
@@ -11,12 +11,14 @@ import { Tabs } from "@/components/ui/tabs";
 import { StatusBadge } from "@/components/ui/status-badge";
 import { TBody, TableFootnote, Td, Th, THead, Table, Tr } from "@/components/ui/table";
 import { Can } from "@/components/auth/permission-gate";
+import { ApprovalHistory } from "@/components/approvals/approval-history";
 import { useLeave } from "@/lib/leave-context";
+import { currentStepLabel } from "@/lib/approval-engine";
 import { useAccessControl } from "@/lib/access-control-context";
 import { useEmployees } from "@/lib/employee-context";
 import { useSite, useSiteFilter } from "@/lib/site-context";
 import { useToast } from "@/lib/toast-context";
-import type { HalfDayPortion, LeaveRequest, MasterRecord } from "@/lib/types";
+import type { ApprovalInstance, HalfDayPortion, LeaveRequest, MasterRecord } from "@/lib/types";
 
 export default function LeavePage() {
   const { currentUser, canFeature } = useAccessControl();
@@ -34,12 +36,15 @@ export default function LeavePage() {
     rejectLeave,
     canCancel,
     cancelLeave,
+    canDecide,
+    approvalInstanceFor,
   } = useLeave();
 
   const [active, setActive] = useState("my");
   const [modalOpen, setModalOpen] = useState(false);
   const [rejectTarget, setRejectTarget] = useState<LeaveRequest | null>(null);
   const [cancelTarget, setCancelTarget] = useState<LeaveRequest | null>(null);
+  const [historyTarget, setHistoryTarget] = useState<LeaveRequest | null>(null);
 
   const canDecideAny = canFeature("leave.requests", "approve") || canFeature("leave.requests", "reject");
   const myLeaveTypes = leaveTypesForSite(currentUser.siteId);
@@ -132,7 +137,14 @@ export default function LeavePage() {
       <Tabs tabs={tabs} active={active} onChange={setActive} />
 
       {active === "my" && (
-        <LeaveTable rows={myRequests} showEmployee={false} onCancel={canCancel} onCancelClick={setCancelTarget} />
+        <LeaveTable
+          rows={myRequests}
+          showEmployee={false}
+          onCancel={canCancel}
+          onCancelClick={setCancelTarget}
+          approvalInstanceFor={approvalInstanceFor}
+          onViewHistory={setHistoryTarget}
+        />
       )}
       {active === "team" && canDecideAny && (
         <>
@@ -148,6 +160,9 @@ export default function LeavePage() {
               onReject={setRejectTarget}
               onCancel={canCancel}
               onCancelClick={setCancelTarget}
+              canDecide={canDecide}
+              approvalInstanceFor={approvalInstanceFor}
+              onViewHistory={setHistoryTarget}
             />
           )}
         </>
@@ -211,6 +226,18 @@ export default function LeavePage() {
             </div>
           </form>
         )}
+      </Modal>
+
+      <Modal open={Boolean(historyTarget)} onClose={() => setHistoryTarget(null)} title="Approval History">
+        {historyTarget &&
+          (() => {
+            const instance = approvalInstanceFor(historyTarget.id);
+            return instance ? (
+              <ApprovalHistory instance={instance} />
+            ) : (
+              <p className="text-sm text-slate-400 dark:text-slate-500">No approval history recorded for this request.</p>
+            );
+          })()}
       </Modal>
     </div>
   );
@@ -335,6 +362,9 @@ function LeaveTable({
   onReject,
   onCancel,
   onCancelClick,
+  canDecide,
+  approvalInstanceFor,
+  onViewHistory,
 }: {
   rows: LeaveRequest[];
   showEmployee: boolean;
@@ -342,6 +372,10 @@ function LeaveTable({
   onReject?: (request: LeaveRequest) => void;
   onCancel?: (request: LeaveRequest) => boolean;
   onCancelClick?: (request: LeaveRequest) => void;
+  /** When omitted, any Pending row shown here is assumed already scoped to the viewer (e.g. "My Leave"). Team Leave passes this so multi-step requests only show live buttons on the step whose turn it actually is. */
+  canDecide?: (request: LeaveRequest) => boolean;
+  approvalInstanceFor?: (requestId: string) => ApprovalInstance | undefined;
+  onViewHistory?: (request: LeaveRequest) => void;
 }) {
   const hasActions = Boolean(onApprove || onReject || onCancel);
   return (
@@ -360,6 +394,10 @@ function LeaveTable({
         <TBody>
           {rows.map((row) => {
             const cancelEligible = onCancel?.(row) ?? false;
+            const instance = approvalInstanceFor?.(row.id);
+            const isMultiStep = Boolean(instance && instance.steps.length > 1);
+            const myTurn = canDecide ? canDecide(row) : true;
+            const hasHistory = Boolean(instance && instance.actions.length > 1);
             return (
               <Tr key={row.id}>
                 {showEmployee && <Td className="font-medium text-slate-800 dark:text-slate-100">{row.employee}</Td>}
@@ -371,7 +409,13 @@ function LeaveTable({
                 <Td>{row.to}</Td>
                 <Td>{row.days}</Td>
                 <Td>
-                  <StatusBadge status={row.status} />
+                  {row.status === "Pending" && isMultiStep && instance ? (
+                    <span className="rounded-full bg-amber-50 px-2.5 py-1 text-xs font-medium text-amber-600 dark:bg-amber-500/10 dark:text-amber-400">
+                      {currentStepLabel(instance)}
+                    </span>
+                  ) : (
+                    <StatusBadge status={row.status} />
+                  )}
                   {(row.status === "Rejected" || row.status === "Approved") && row.decisionReason && (
                     <p className="mt-1 max-w-[220px] text-xs text-slate-400 dark:text-slate-500">{row.decisionReason}</p>
                   )}
@@ -381,12 +425,20 @@ function LeaveTable({
                       {row.cancellationReason ? ` — ${row.cancellationReason}` : ""}
                     </p>
                   )}
+                  {hasHistory && onViewHistory && (
+                    <button
+                      onClick={() => onViewHistory(row)}
+                      className="mt-1 flex items-center gap-1 text-[11px] font-medium text-indigo-600 hover:underline dark:text-indigo-400"
+                    >
+                      <History className="h-3 w-3" /> History
+                    </button>
+                  )}
                 </Td>
                 <Td>{row.reason}</Td>
                 {hasActions && (
                   <Td>
                     <div className="flex items-center gap-2">
-                      {row.status === "Pending" && onApprove && (
+                      {row.status === "Pending" && onApprove && myTurn && (
                         <button
                           onClick={() => onApprove(row)}
                           className="flex items-center gap-1 rounded-lg bg-emerald-50 px-2.5 py-1.5 text-xs font-medium text-emerald-600 hover:bg-emerald-100 dark:bg-emerald-500/10 dark:text-emerald-400 dark:hover:bg-emerald-500/20"
@@ -394,13 +446,16 @@ function LeaveTable({
                           <Check className="h-3.5 w-3.5" /> Approve
                         </button>
                       )}
-                      {row.status === "Pending" && onReject && (
+                      {row.status === "Pending" && onReject && myTurn && (
                         <button
                           onClick={() => onReject(row)}
                           className="flex items-center gap-1 rounded-lg bg-rose-50 px-2.5 py-1.5 text-xs font-medium text-rose-600 hover:bg-rose-100 dark:bg-rose-500/10 dark:text-rose-400 dark:hover:bg-rose-500/20"
                         >
                           <X className="h-3.5 w-3.5" /> Reject
                         </button>
+                      )}
+                      {row.status === "Pending" && (onApprove || onReject) && !myTurn && (
+                        <span className="text-xs text-slate-300 dark:text-slate-600">Not your turn yet</span>
                       )}
                       {cancelEligible && onCancelClick && (
                         <button

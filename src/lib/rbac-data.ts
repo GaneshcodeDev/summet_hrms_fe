@@ -257,6 +257,7 @@ export const seedRolePermissions: Record<string, RolePermissionMap> = {
     "expenses.claims": ["view", "approve", "reject"],
     "expenses.travel": ["view", "approve", "reject"],
     "performance.reviews": ["view", "edit"],
+    "reports.analytics": ["view"],
     "events.calendar": ["view"],
   }),
 
@@ -274,6 +275,7 @@ export const seedRolePermissions: Record<string, RolePermissionMap> = {
     "expenses.travel": ["view", "create"],
     "performance.reviews": ["view"],
     "training.programs": ["view"],
+    "reports.analytics": ["view"],
     "events.calendar": ["view"],
   }),
 

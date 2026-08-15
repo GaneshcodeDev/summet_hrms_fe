@@ -1279,3 +1279,72 @@ export interface ExpenseAuditEntry {
   detail: string;
   timestamp: string;
 }
+
+/* ------------------------------------------------------------------ */
+/* Reusable Approval Workflow (Phase 9)                                 */
+/*                                                                      */
+/* A generic, module-agnostic approval abstraction that existing        */
+/* per-module approve/reject logic (Leave, Regularization, Expense,     */
+/* Loan, Payroll) can gradually record itself against. It does not      */
+/* replace those modules' own status fields/authorization checks —      */
+/* each module remains the source of truth for its own business rules;  */
+/* this only adds a shared, cross-module audit trail and (for Leave's   */
+/* Manager-then-HR mode) a real multi-step gate. See approval-engine.ts /*
+/* approval-context.tsx.                                                */
+/* ------------------------------------------------------------------ */
+
+export const approvalModules = ["Leave", "Regularization", "Expense", "Loan", "Payroll"] as const;
+export type ApprovalModule = (typeof approvalModules)[number];
+
+export const approverTypes = [
+  "REPORTING_MANAGER",
+  "DEPARTMENT_HEAD",
+  "HR",
+  "SITE_ADMIN",
+  "PAYROLL_ADMIN",
+  "SPECIFIC_USER",
+] as const;
+export type ApproverType = (typeof approverTypes)[number];
+
+export interface WorkflowStep {
+  order: number;
+  approverType: ApproverType;
+  /** Only meaningful when approverType is SPECIFIC_USER. */
+  specificEmployeeId?: string;
+  required: boolean;
+}
+
+/** A resolved chain of steps for one instance — not persisted as a separate "WorkflowDefinition" record; see resolveWorkflowSteps in approval-engine.ts for how each module's existing config (SiteLeaveConfig.approvalMode, etc.) produces this. */
+export type WorkflowStepChain = WorkflowStep[];
+
+export type ApprovalInstanceStatus = "Pending" | "Approved" | "Rejected" | "Cancelled";
+export type ApprovalActionType = "APPLY" | "APPROVE" | "REJECT" | "CANCEL";
+
+export interface ApprovalAction {
+  id: string;
+  stepOrder: number;
+  approverType: ApproverType;
+  actorEmployeeId?: string;
+  actorName: string;
+  action: ApprovalActionType;
+  previousStatus: ApprovalInstanceStatus;
+  newStatus: ApprovalInstanceStatus;
+  comment?: string;
+  timestamp: string;
+}
+
+export interface ApprovalInstance {
+  id: string;
+  siteId: string;
+  module: ApprovalModule;
+  /** The id of the record this instance governs (e.g. a LeaveRequest.id) — never trust a caller-supplied recordId without also checking siteId/requestedBy server-side-equivalent (see approval-context.tsx). */
+  recordId: string;
+  steps: WorkflowStepChain;
+  currentStep: number;
+  status: ApprovalInstanceStatus;
+  requestedBy: string;
+  requestedByName: string;
+  requestedAt: string;
+  completedAt?: string;
+  actions: ApprovalAction[];
+}

@@ -12,6 +12,7 @@ import { expenseAuditStore, expenseClaimsStore, logExpenseAudit, travelRequestsS
 import { expenseCategoryConfig } from "@/lib/expense-data";
 import { employees } from "@/lib/mock-data";
 import { useAccessControl } from "@/lib/access-control-context";
+import { useApprovals } from "@/lib/approval-context";
 import type {
   ExpenseClaim,
   ExpenseClaimStatus,
@@ -80,6 +81,7 @@ function itemsTotal(items: ExpenseItem[]) {
 
 export function ExpenseProvider({ children }: { children: ReactNode }) {
   const { currentUser, canFeature } = useAccessControl();
+  const { recordMirroredAction } = useApprovals();
 
   const travelRequests = useSyncExternalStore(
     travelRequestsStore.subscribe,
@@ -194,9 +196,20 @@ export function ExpenseProvider({ children }: { children: ReactNode }) {
         ),
       );
       logExpenseAudit({ refId: id, employeeName: request.employee, action: "travel_decided", actorName: currentUser.name, detail: `Travel request ${status.toLowerCase()}${reason ? ` — ${reason}` : ""}` });
+      recordMirroredAction({
+        siteId: request.siteId ?? currentUser.siteId,
+        module: "Expense",
+        recordId: id,
+        recordOwnerEmployeeId: request.employeeId,
+        recordOwnerName: request.employee,
+        approverType: hasBroadTravelScope ? "HR" : "REPORTING_MANAGER",
+        action: status === "Approved" ? "APPROVE" : "REJECT",
+        newStatus: status === "Approved" ? "Approved" : "Rejected",
+        comment: reason,
+      });
       return { ok: true, message: `Travel request ${status.toLowerCase()}.` };
     },
-    [canDecideTravel, currentUser.employeeId, currentUser.name],
+    [canDecideTravel, currentUser.employeeId, currentUser.name, currentUser.siteId, hasBroadTravelScope, recordMirroredAction],
   );
 
   const createExpenseClaim = useCallback(
@@ -268,9 +281,27 @@ export function ExpenseProvider({ children }: { children: ReactNode }) {
 
       mutateClaim(claimId, (c) => ({ ...c, status: "Submitted", submittedOn: new Date().toISOString().slice(0, 10) }));
       logExpenseAudit({ refId: claimId, employeeName: claim.employee, action: "submitted", actorName: currentUser.name, detail: `Claim submitted for ₹${claim.totalAmount.toLocaleString("en-IN")}` });
+      // Expense Claims' existing flow is genuinely two-step (Manager, then
+      // Finance) — declare both steps up front so the shared Approval
+      // History attributes each decision correctly; still purely a mirror,
+      // this module's own canManagerDecide/canFinanceDecide keep gating.
+      recordMirroredAction({
+        siteId: claim.siteId ?? currentUser.siteId,
+        module: "Expense",
+        recordId: claimId,
+        recordOwnerEmployeeId: claim.employeeId,
+        recordOwnerName: claim.employee,
+        approverType: "REPORTING_MANAGER",
+        action: "APPLY",
+        newStatus: "Pending",
+        steps: [
+          { order: 0, approverType: "REPORTING_MANAGER", required: true },
+          { order: 1, approverType: "HR", required: true },
+        ],
+      });
       return { ok: true, message: "Expense claim submitted for approval." };
     },
-    [currentUser.employeeId, currentUser.name, mutateClaim],
+    [currentUser.employeeId, currentUser.name, currentUser.siteId, mutateClaim, recordMirroredAction],
   );
 
   const managerDecideClaim = useCallback(
@@ -295,9 +326,22 @@ export function ExpenseProvider({ children }: { children: ReactNode }) {
         actorName: currentUser.name,
         detail: status === "Manager Approved" ? "Manager approved" : `Manager rejected — ${reason}`,
       });
+      recordMirroredAction({
+        siteId: claim.siteId ?? currentUser.siteId,
+        module: "Expense",
+        recordId: claimId,
+        recordOwnerEmployeeId: claim.employeeId,
+        recordOwnerName: claim.employee,
+        approverType: "REPORTING_MANAGER",
+        action: status === "Manager Approved" ? "APPROVE" : "REJECT",
+        newStatus: status === "Manager Approved" ? "Pending" : "Rejected",
+        comment: reason,
+        stepOrder: 0,
+        advanceToNextStep: status === "Manager Approved",
+      });
       return { ok: true, message: status === "Manager Approved" ? "Claim approved and sent to Finance." : "Claim rejected." };
     },
-    [canManagerDecide, currentUser.employeeId, currentUser.name, mutateClaim],
+    [canManagerDecide, currentUser.employeeId, currentUser.name, currentUser.siteId, mutateClaim, recordMirroredAction],
   );
 
   const financeDecideClaim = useCallback(
@@ -321,9 +365,21 @@ export function ExpenseProvider({ children }: { children: ReactNode }) {
         actorName: currentUser.name,
         detail: status === "Finance Approved" ? "Finance approved — ready for reimbursement" : `Finance rejected — ${reason}`,
       });
+      recordMirroredAction({
+        siteId: claim.siteId ?? currentUser.siteId,
+        module: "Expense",
+        recordId: claimId,
+        recordOwnerEmployeeId: claim.employeeId,
+        recordOwnerName: claim.employee,
+        approverType: "HR",
+        action: status === "Finance Approved" ? "APPROVE" : "REJECT",
+        newStatus: status === "Finance Approved" ? "Approved" : "Rejected",
+        comment: reason,
+        stepOrder: 1,
+      });
       return { ok: true, message: status === "Finance Approved" ? "Claim approved for reimbursement." : "Claim rejected." };
     },
-    [canFinanceDecide, currentUser.name, mutateClaim],
+    [canFinanceDecide, currentUser.name, currentUser.siteId, mutateClaim, recordMirroredAction],
   );
 
   const markReimbursed = useCallback(

@@ -104,7 +104,14 @@
       "Bash(timeout 90 npm install playwright@latest)",
       "Bash(timeout 100 node run.mjs)",
       "Bash(timeout 180 node run.mjs)",
-      "Bash(timeout 60 node debug_logout.mjs)"
+      "Bash(timeout 60 node debug_logout.mjs)",
+      "Bash(curl -s -o /dev/null -w \"%{http_code}\\\\n\" http://localhost:3000 --max-time 5)",
+      "Read(//tmp/claude-1000/**)",
+      "Bash(netstat -tlnp)",
+      "Bash(curl -sv http://localhost:3000 --max-time 5)",
+      "Bash(ps -p 12555 -o pid,ppid,stat,etime,cmd)",
+      "Bash(kill -9 12555)",
+      "Bash(pkill -9 -f \"next dev\")"
     ],
     "additionalDirectories": [
       "/Users/ganeshpandey/Developer/summeet_hrms_fe/src/app/(app)/organization/units/[type]",
