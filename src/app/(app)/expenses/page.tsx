@@ -1,7 +1,9 @@
 "use client";
 
 import { FormEvent, useMemo, useState } from "react";
-import { Check, Plane, Plus, Receipt, Trash2, X } from "lucide-react";
+import Link from "next/link";
+import { useRouter } from "next/navigation";
+import { Check, Plane, Plus, X } from "lucide-react";
 import { PageHeader } from "@/components/layout/page-header";
 import { Card } from "@/components/ui/card";
 import { Button } from "@/components/ui/button";
@@ -10,21 +12,25 @@ import { Field, Input, Select, Textarea } from "@/components/ui/form";
 import { Tabs } from "@/components/ui/tabs";
 import { StatusBadge } from "@/components/ui/status-badge";
 import { EmptyRow, TBody, TableFootnote, Td, Th, THead, Table, Tr } from "@/components/ui/table";
-import { expenseCategories, expenseCategoryConfig } from "@/lib/expense-data";
-import { useExpense } from "@/lib/expense-context";
+import { useSiteFilter } from "@/lib/site-context";
+import { useEmployees } from "@/lib/employee-context";
 import { useAccessControl } from "@/lib/access-control-context";
+import { useExpense } from "@/lib/expense-context";
 import { useToast } from "@/lib/toast-context";
-import type { ExpenseCategory, ExpenseClaim, TravelMode, TravelRequest } from "@/lib/types";
+import type { TravelMode, TravelRequest, TravelType } from "@/lib/types";
 
 const travelModes: TravelMode[] = ["Flight", "Train", "Bus", "Cab", "Self"];
+const travelTypes: TravelType[] = ["Domestic", "International"];
 
 function currency(n: number) {
   return `₹${n.toLocaleString("en-IN")}`;
 }
 
 export default function ExpensesPage() {
-  const { currentUser } = useAccessControl();
+  const { currentUser, canFeature } = useAccessControl();
+  const { getEmployeeByEmployeeId } = useEmployees();
   const toast = useToast();
+  const router = useRouter();
   const {
     claimsFor,
     requestsFor,
@@ -32,30 +38,24 @@ export default function ExpensesPage() {
     visibleTeamTravelRequests,
     canApproveClaims,
     canApproveTravel,
-    canManagerDecide,
-    canFinanceDecide,
     canDecideTravel,
     createExpenseClaim,
     createTravelRequest,
     decideTravelRequest,
-    managerDecideClaim,
-    financeDecideClaim,
-    markReimbursed,
-    cancelClaim,
-    hasBroadClaimScope,
   } = useExpense();
 
   const [active, setActive] = useState("claims");
   const [claimModalOpen, setClaimModalOpen] = useState(false);
   const [travelModalOpen, setTravelModalOpen] = useState(false);
-  const [selectedClaimId, setSelectedClaimId] = useState<string | null>(null);
   const [rejectTravelTarget, setRejectTravelTarget] = useState<TravelRequest | null>(null);
 
   const myClaims = claimsFor(currentUser.employeeId);
   const myTravelRequests = requestsFor(currentUser.employeeId);
-  const teamClaims = useMemo(() => visibleTeamClaims(), [visibleTeamClaims]);
-  const teamTravel = useMemo(() => visibleTeamTravelRequests(), [visibleTeamTravelRequests]);
+  const teamClaims = useSiteFilter(useMemo(() => visibleTeamClaims(), [visibleTeamClaims]));
+  const teamTravel = useSiteFilter(useMemo(() => visibleTeamTravelRequests(), [visibleTeamTravelRequests]));
   const approvalsCount = teamClaims.length + teamTravel.length;
+  const canRequestTravel = canFeature("expenses.travel", "create") || canFeature("expenses.travel", "edit") || canFeature("expenses.travel", "manage");
+  const canCreateClaim = canFeature("expenses.claims", "create") || canFeature("expenses.claims", "edit") || canFeature("expenses.claims", "manage");
 
   const tabs = [
     { id: "claims", label: "My Claims" },
@@ -66,24 +66,32 @@ export default function ExpensesPage() {
   function handleCreateClaim(e: FormEvent<HTMLFormElement>) {
     e.preventDefault();
     const form = new FormData(e.currentTarget);
-    const result = createExpenseClaim(String(form.get("title") ?? ""));
+    const result = createExpenseClaim(String(form.get("title") ?? ""), String(form.get("travelRequestId") ?? "") || undefined);
     (result.ok ? toast.success : toast.error)(result.message);
-    if (result.ok) {
+    if (result.ok && result.claim) {
       setClaimModalOpen(false);
-      e.currentTarget.reset();
+      router.push(`/expenses/claims/${result.claim.id}`);
     }
   }
 
   function handleCreateTravel(e: FormEvent<HTMLFormElement>) {
     e.preventDefault();
     const form = new FormData(e.currentTarget);
+    const advanceRequired = form.get("advanceRequired") === "on";
     const result = createTravelRequest({
       purpose: String(form.get("purpose") ?? ""),
+      travelType: String(form.get("travelType")) as TravelType,
+      from: String(form.get("from") ?? ""),
       destination: String(form.get("destination") ?? ""),
       mode: String(form.get("mode")) as TravelMode,
       fromDate: String(form.get("fromDate") ?? ""),
       toDate: String(form.get("toDate") ?? ""),
       estimatedCost: Number(form.get("estimatedCost") ?? 0),
+      advanceRequired,
+      advanceAmount: advanceRequired ? Number(form.get("advanceAmount") ?? 0) : undefined,
+      accommodationRequired: form.get("accommodationRequired") === "on",
+      transportRequired: form.get("transportRequired") === "on",
+      remarks: String(form.get("remarks") ?? "") || undefined,
     });
     (result.ok ? toast.success : toast.error)(result.message);
     if (result.ok) {
@@ -106,7 +114,7 @@ export default function ExpensesPage() {
     if (result.ok) setRejectTravelTarget(null);
   }
 
-  const selectedClaim = [...myClaims, ...teamClaims].find((c) => c.id === selectedClaimId) ?? null;
+  const employeeName = (employeeId: string, fallback: string) => getEmployeeByEmployeeId(employeeId)?.name ?? fallback;
 
   return (
     <div className="space-y-6">
@@ -114,11 +122,11 @@ export default function ExpensesPage() {
         title="Expenses & Travel"
         description="Submit expense claims and travel requests, and track reimbursements"
         action={
-          active === "travel" ? (
+          active === "travel" && canRequestTravel ? (
             <Button onClick={() => setTravelModalOpen(true)}>
               <Plane className="h-4 w-4" /> Request Travel
             </Button>
-          ) : active === "claims" ? (
+          ) : active === "claims" && canCreateClaim ? (
             <Button onClick={() => setClaimModalOpen(true)}>
               <Plus className="h-4 w-4" /> New Claim
             </Button>
@@ -136,25 +144,24 @@ export default function ExpensesPage() {
               <Th>Items</Th>
               <Th>Total</Th>
               <Th>Status</Th>
-              <Th />
             </THead>
             <TBody>
               {myClaims.map((c) => (
                 <Tr key={c.id} hoverable>
-                  <Td className="font-medium text-slate-800 dark:text-slate-100">{c.title}</Td>
+                  <Td>
+                    <Link href={`/expenses/claims/${c.id}`} className="font-medium text-slate-800 hover:text-indigo-600 dark:text-slate-100 dark:hover:text-indigo-400">
+                      {c.title}
+                    </Link>
+                    <p className="text-xs text-slate-400 dark:text-slate-500">{c.id}</p>
+                  </Td>
                   <Td>{c.items.length}</Td>
                   <Td>{currency(c.totalAmount)}</Td>
                   <Td>
                     <StatusBadge status={c.status} />
                   </Td>
-                  <Td>
-                    <button onClick={() => setSelectedClaimId(c.id)} className="text-xs font-medium text-indigo-600 hover:underline dark:text-indigo-400">
-                      View
-                    </button>
-                  </Td>
                 </Tr>
               ))}
-              {myClaims.length === 0 && <EmptyRow colSpan={5}>No expense claims yet.</EmptyRow>}
+              {myClaims.length === 0 && <EmptyRow colSpan={4}>No expense claims yet.</EmptyRow>}
             </TBody>
           </Table>
           <TableFootnote>
@@ -168,6 +175,7 @@ export default function ExpensesPage() {
           <Table>
             <THead>
               <Th>Purpose</Th>
+              <Th>Type</Th>
               <Th>Destination</Th>
               <Th>Mode</Th>
               <Th>Dates</Th>
@@ -177,7 +185,13 @@ export default function ExpensesPage() {
             <TBody>
               {myTravelRequests.map((r) => (
                 <Tr key={r.id}>
-                  <Td className="font-medium text-slate-800 dark:text-slate-100">{r.purpose}</Td>
+                  <Td>
+                    <Link href={`/expenses/travel/${r.id}`} className="font-medium text-slate-800 hover:text-indigo-600 dark:text-slate-100 dark:hover:text-indigo-400">
+                      {r.purpose}
+                    </Link>
+                    <p className="text-xs text-slate-400 dark:text-slate-500">{r.id}</p>
+                  </Td>
+                  <Td>{r.travelType}</Td>
                   <Td>{r.destination}</Td>
                   <Td>{r.mode}</Td>
                   <Td>
@@ -189,7 +203,7 @@ export default function ExpensesPage() {
                   </Td>
                 </Tr>
               ))}
-              {myTravelRequests.length === 0 && <EmptyRow colSpan={6}>No travel requests yet.</EmptyRow>}
+              {myTravelRequests.length === 0 && <EmptyRow colSpan={7}>No travel requests yet.</EmptyRow>}
             </TBody>
           </Table>
           <TableFootnote>
@@ -216,16 +230,16 @@ export default function ExpensesPage() {
                 <TBody>
                   {teamClaims.map((c) => (
                     <Tr key={c.id}>
-                      <Td className="font-medium text-slate-800 dark:text-slate-100">{c.employee}</Td>
+                      <Td className="font-medium text-slate-800 dark:text-slate-100">{employeeName(c.employeeId, c.employee)}</Td>
                       <Td>{c.title}</Td>
                       <Td>{currency(c.totalAmount)}</Td>
                       <Td>
                         <StatusBadge status={c.status} />
                       </Td>
                       <Td>
-                        <button onClick={() => setSelectedClaimId(c.id)} className="text-xs font-medium text-indigo-600 hover:underline dark:text-indigo-400">
+                        <Link href={`/expenses/claims/${c.id}`} className="text-xs font-medium text-indigo-600 hover:underline dark:text-indigo-400">
                           Review
-                        </button>
+                        </Link>
                       </Td>
                     </Tr>
                   ))}
@@ -251,8 +265,12 @@ export default function ExpensesPage() {
                 <TBody>
                   {teamTravel.map((r) => (
                     <Tr key={r.id}>
-                      <Td className="font-medium text-slate-800 dark:text-slate-100">{r.employee}</Td>
-                      <Td>{r.purpose}</Td>
+                      <Td className="font-medium text-slate-800 dark:text-slate-100">{employeeName(r.employeeId, r.employee)}</Td>
+                      <Td>
+                        <Link href={`/expenses/travel/${r.id}`} className="hover:text-indigo-600 dark:hover:text-indigo-400">
+                          {r.purpose}
+                        </Link>
+                      </Td>
                       <Td>{r.destination}</Td>
                       <Td>{currency(r.estimatedCost)}</Td>
                       <Td>
@@ -284,6 +302,20 @@ export default function ExpensesPage() {
           <Field label="Title">
             <Input name="title" required placeholder="e.g. Bangalore Client Visit" />
           </Field>
+          {myTravelRequests.some((r) => r.status === "Approved" || r.status === "Completed") && (
+            <Field label="Travel Request (optional)">
+              <Select name="travelRequestId" defaultValue="">
+                <option value="">— Not related to a trip —</option>
+                {myTravelRequests
+                  .filter((r) => r.status === "Approved" || r.status === "Completed")
+                  .map((r) => (
+                    <option key={r.id} value={r.id}>
+                      {r.purpose} ({r.id})
+                    </option>
+                  ))}
+              </Select>
+            </Field>
+          )}
           <div className="flex justify-end gap-2 pt-2">
             <Button type="button" variant="outline" onClick={() => setClaimModalOpen(false)}>
               Cancel
@@ -299,8 +331,12 @@ export default function ExpensesPage() {
             <Input name="purpose" required placeholder="e.g. Client demo" />
           </Field>
           <div className="grid grid-cols-2 gap-4">
-            <Field label="Destination">
-              <Input name="destination" required placeholder="e.g. Bangalore" />
+            <Field label="Travel Type">
+              <Select name="travelType" required defaultValue={travelTypes[0]}>
+                {travelTypes.map((t) => (
+                  <option key={t}>{t}</option>
+                ))}
+              </Select>
             </Field>
             <Field label="Mode">
               <Select name="mode" required defaultValue={travelModes[0]}>
@@ -312,14 +348,44 @@ export default function ExpensesPage() {
           </div>
           <div className="grid grid-cols-2 gap-4">
             <Field label="From">
-              <Input name="fromDate" type="date" required />
+              <Input name="from" required placeholder="e.g. Noida" />
             </Field>
             <Field label="To">
+              <Input name="destination" required placeholder="e.g. Bangalore" />
+            </Field>
+          </div>
+          <div className="grid grid-cols-2 gap-4">
+            <Field label="Start Date">
+              <Input name="fromDate" type="date" required />
+            </Field>
+            <Field label="End Date">
               <Input name="toDate" type="date" required />
             </Field>
           </div>
           <Field label="Estimated Cost">
             <Input name="estimatedCost" type="number" min={1} required />
+          </Field>
+          <div className="grid grid-cols-2 gap-4">
+            <label className="flex items-center gap-2 text-sm text-slate-600 dark:text-slate-300">
+              <input type="checkbox" name="advanceRequired" className="h-4 w-4 rounded border-slate-300" />
+              Advance required
+            </label>
+            <Field label="Advance Amount">
+              <Input name="advanceAmount" type="number" min={0} />
+            </Field>
+          </div>
+          <div className="grid grid-cols-2 gap-4">
+            <label className="flex items-center gap-2 text-sm text-slate-600 dark:text-slate-300">
+              <input type="checkbox" name="accommodationRequired" className="h-4 w-4 rounded border-slate-300" />
+              Accommodation required
+            </label>
+            <label className="flex items-center gap-2 text-sm text-slate-600 dark:text-slate-300">
+              <input type="checkbox" name="transportRequired" className="h-4 w-4 rounded border-slate-300" />
+              Transport required
+            </label>
+          </div>
+          <Field label="Remarks (optional)">
+            <Textarea name="remarks" rows={2} />
           </Field>
           <div className="flex justify-end gap-2 pt-2">
             <Button type="button" variant="outline" onClick={() => setTravelModalOpen(false)}>
@@ -347,266 +413,6 @@ export default function ExpensesPage() {
           </form>
         )}
       </Modal>
-
-      {selectedClaim && (
-        <ClaimDetailModal
-          claim={selectedClaim}
-          onClose={() => setSelectedClaimId(null)}
-          canManagerDecide={canManagerDecide(selectedClaim)}
-          canFinanceDecide={canFinanceDecide(selectedClaim)}
-          canReimburse={hasBroadClaimScope && selectedClaim.status === "Finance Approved"}
-          onManagerDecide={managerDecideClaim}
-          onFinanceDecide={financeDecideClaim}
-          onReimburse={markReimbursed}
-          onCancelClaim={cancelClaim}
-        />
-      )}
     </div>
-  );
-}
-
-function ClaimDetailModal({
-  claim,
-  onClose,
-  canManagerDecide,
-  canFinanceDecide,
-  canReimburse,
-  onManagerDecide,
-  onFinanceDecide,
-  onReimburse,
-  onCancelClaim,
-}: {
-  claim: ExpenseClaim;
-  onClose: () => void;
-  canManagerDecide: boolean;
-  canFinanceDecide: boolean;
-  canReimburse: boolean;
-  onManagerDecide: (id: string, status: "Manager Approved" | "Rejected", reason?: string) => { ok: boolean; message: string };
-  onFinanceDecide: (id: string, status: "Finance Approved" | "Rejected", reason?: string) => { ok: boolean; message: string };
-  onReimburse: (id: string, reference: string) => { ok: boolean; message: string };
-  onCancelClaim: (id: string) => { ok: boolean; message: string };
-}) {
-  const toast = useToast();
-  const { currentUser } = useAccessControl();
-  const { addExpenseItem, removeExpenseItem, submitClaim } = useExpense();
-  const [rejectReason, setRejectReason] = useState("");
-  const [showReject, setShowReject] = useState<"manager" | "finance" | null>(null);
-  const [reimburseRef, setReimburseRef] = useState("");
-  const [showReimburse, setShowReimburse] = useState(false);
-
-  const isOwner = claim.employeeId === currentUser.employeeId;
-  const isDraft = claim.status === "Draft";
-
-  function handleAddItem(e: FormEvent<HTMLFormElement>) {
-    e.preventDefault();
-    const form = new FormData(e.currentTarget);
-    const result = addExpenseItem(claim.id, {
-      date: String(form.get("date") ?? ""),
-      category: String(form.get("category")) as ExpenseCategory,
-      amount: Number(form.get("amount") ?? 0),
-      description: String(form.get("description") ?? ""),
-      hasReceipt: form.get("hasReceipt") === "on",
-      overLimitNote: String(form.get("overLimitNote") ?? "") || undefined,
-    });
-    (result.ok ? toast.success : toast.error)(result.message);
-    if (result.ok) e.currentTarget.reset();
-  }
-
-  function handleRemoveItem(itemId: string) {
-    const result = removeExpenseItem(claim.id, itemId);
-    if (!result.ok) toast.error(result.message);
-  }
-
-  function handleSubmitClaim() {
-    const result = submitClaim(claim.id);
-    (result.ok ? toast.success : toast.error)(result.message);
-    if (result.ok) onClose();
-  }
-
-  function handleCancel() {
-    const result = onCancelClaim(claim.id);
-    (result.ok ? toast.success : toast.error)(result.message);
-    if (result.ok) onClose();
-  }
-
-  function handleManagerApprove() {
-    const result = onManagerDecide(claim.id, "Manager Approved");
-    (result.ok ? toast.success : toast.error)(result.message);
-  }
-
-  function handleFinanceApprove() {
-    const result = onFinanceDecide(claim.id, "Finance Approved");
-    (result.ok ? toast.success : toast.error)(result.message);
-  }
-
-  function handleRejectSubmit(e: FormEvent<HTMLFormElement>) {
-    e.preventDefault();
-    const result = showReject === "manager" ? onManagerDecide(claim.id, "Rejected", rejectReason) : onFinanceDecide(claim.id, "Rejected", rejectReason);
-    (result.ok ? toast.success : toast.error)(result.message);
-    if (result.ok) {
-      setShowReject(null);
-      setRejectReason("");
-    }
-  }
-
-  function handleReimburseSubmit(e: FormEvent<HTMLFormElement>) {
-    e.preventDefault();
-    const result = onReimburse(claim.id, reimburseRef);
-    (result.ok ? toast.success : toast.error)(result.message);
-    if (result.ok) setShowReimburse(false);
-  }
-
-  return (
-    <Modal open onClose={onClose} title={claim.title}>
-      <div className="space-y-4">
-        <div className="flex items-center justify-between">
-          <span className="text-sm text-slate-500 dark:text-slate-400">{claim.employee}</span>
-          <StatusBadge status={claim.status} />
-        </div>
-
-        <div className="space-y-2">
-          {claim.items.map((item) => (
-            <div key={item.id} className="flex items-start justify-between gap-3 rounded-lg border border-slate-100 p-3 text-sm dark:border-slate-800">
-              <div>
-                <p className="font-medium text-slate-700 dark:text-slate-200">
-                  {item.category} · {item.description}
-                </p>
-                <p className="text-xs text-slate-400 dark:text-slate-500">
-                  {item.date} · {item.hasReceipt ? "Receipt attached" : "No receipt"}
-                </p>
-                {item.overLimitNote && <p className="mt-1 text-xs text-amber-600 dark:text-amber-400">Over limit — {item.overLimitNote}</p>}
-              </div>
-              <div className="flex items-center gap-2">
-                <span className="font-semibold text-slate-800 dark:text-slate-100">{currency(item.amount)}</span>
-                {isDraft && isOwner && (
-                  <button onClick={() => handleRemoveItem(item.id)} className="text-slate-400 hover:text-rose-500">
-                    <Trash2 className="h-3.5 w-3.5" />
-                  </button>
-                )}
-              </div>
-            </div>
-          ))}
-          {claim.items.length === 0 && <p className="text-sm text-slate-400 dark:text-slate-500">No items added yet.</p>}
-        </div>
-
-        <div className="flex items-center justify-between rounded-lg bg-slate-50 px-3.5 py-2.5 text-sm font-semibold text-slate-700 dark:bg-slate-800 dark:text-slate-200">
-          <span>Total</span>
-          <span>{currency(claim.totalAmount)}</span>
-        </div>
-
-        {isDraft && isOwner && (
-          <form className="space-y-3 border-t border-slate-100 pt-4 dark:border-slate-800" onSubmit={handleAddItem}>
-            <p className="flex items-center gap-1.5 text-xs font-semibold uppercase tracking-wide text-slate-400 dark:text-slate-500">
-              <Receipt className="h-3.5 w-3.5" /> Add Item
-            </p>
-            <div className="grid grid-cols-2 gap-3">
-              <Field label="Date">
-                <Input name="date" type="date" required />
-              </Field>
-              <Field label="Category">
-                <Select name="category" required defaultValue={expenseCategories[0]}>
-                  {expenseCategories.map((c) => (
-                    <option key={c} value={c}>
-                      {c} (limit {currency(expenseCategoryConfig[c].claimLimit)})
-                    </option>
-                  ))}
-                </Select>
-              </Field>
-            </div>
-            <Field label="Description">
-              <Input name="description" required placeholder="e.g. Taxi to airport" />
-            </Field>
-            <div className="grid grid-cols-2 gap-3">
-              <Field label="Amount">
-                <Input name="amount" type="number" min={1} required />
-              </Field>
-              <label className="flex items-center gap-2 pt-6 text-sm text-slate-600 dark:text-slate-300">
-                <input type="checkbox" name="hasReceipt" className="h-4 w-4 rounded border-slate-300" />
-                Receipt attached
-              </label>
-            </div>
-            <Field label="Justification (only needed if over the category limit)">
-              <Textarea name="overLimitNote" rows={2} placeholder="Explain why this exceeds the usual limit" />
-            </Field>
-            <Button type="submit" size="sm" variant="outline">
-              <Plus className="h-3.5 w-3.5" /> Add Item
-            </Button>
-          </form>
-        )}
-
-        {isDraft && isOwner && (
-          <div className="flex justify-end gap-2 border-t border-slate-100 pt-4 dark:border-slate-800">
-            <Button variant="outline" onClick={handleCancel}>
-              Discard Draft
-            </Button>
-            <Button onClick={handleSubmitClaim}>Submit for Approval</Button>
-          </div>
-        )}
-
-        {claim.managerDecisionReason && (
-          <p className="text-xs text-slate-400 dark:text-slate-500">Manager: {claim.managerDecisionReason}</p>
-        )}
-        {claim.financeDecisionReason && (
-          <p className="text-xs text-slate-400 dark:text-slate-500">Finance: {claim.financeDecisionReason}</p>
-        )}
-        {claim.status === "Reimbursed" && (
-          <p className="text-xs text-emerald-600 dark:text-emerald-400">
-            Reimbursed on {claim.reimbursedOn} — ref {claim.reimbursementReference}
-          </p>
-        )}
-
-        {canManagerDecide && (
-          <div className="flex justify-end gap-2 border-t border-slate-100 pt-4 dark:border-slate-800">
-            <Button variant="outline" onClick={() => setShowReject("manager")}>
-              Reject
-            </Button>
-            <Button onClick={handleManagerApprove}>Approve</Button>
-          </div>
-        )}
-        {canFinanceDecide && (
-          <div className="flex justify-end gap-2 border-t border-slate-100 pt-4 dark:border-slate-800">
-            <Button variant="outline" onClick={() => setShowReject("finance")}>
-              Reject
-            </Button>
-            <Button onClick={handleFinanceApprove}>Finance Approve</Button>
-          </div>
-        )}
-        {canReimburse && (
-          <div className="flex justify-end border-t border-slate-100 pt-4 dark:border-slate-800">
-            <Button onClick={() => setShowReimburse(true)}>Mark Reimbursed</Button>
-          </div>
-        )}
-
-        {showReject && (
-          <form className="space-y-3 border-t border-slate-100 pt-4 dark:border-slate-800" onSubmit={handleRejectSubmit}>
-            <Field label="Reason for Rejection">
-              <Textarea rows={2} required value={rejectReason} onChange={(e) => setRejectReason(e.target.value)} />
-            </Field>
-            <div className="flex justify-end gap-2">
-              <Button type="button" variant="outline" onClick={() => setShowReject(null)}>
-                Cancel
-              </Button>
-              <Button type="submit" variant="danger">
-                Confirm Reject
-              </Button>
-            </div>
-          </form>
-        )}
-
-        {showReimburse && (
-          <form className="space-y-3 border-t border-slate-100 pt-4 dark:border-slate-800" onSubmit={handleReimburseSubmit}>
-            <Field label="Payment Reference">
-              <Input required value={reimburseRef} onChange={(e) => setReimburseRef(e.target.value)} placeholder="e.g. NEFT-2024-0912" />
-            </Field>
-            <div className="flex justify-end gap-2">
-              <Button type="button" variant="outline" onClick={() => setShowReimburse(false)}>
-                Cancel
-              </Button>
-              <Button type="submit">Confirm Reimbursement</Button>
-            </div>
-          </form>
-        )}
-      </div>
-    </Modal>
   );
 }

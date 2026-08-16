@@ -43,7 +43,7 @@ export const onboardingDocumentTemplates: DocTemplate[] = [
 ];
 
 /** Builds a case's task list from the templates, marking `doneIds`/`inProgressIds` as such. */
-function buildTasks(caseId: string, doneIds: string[], inProgressIds: string[], completedBy: string, completedOn: string): OnboardingTask[] {
+export function buildTasks(caseId: string, doneIds: string[], inProgressIds: string[], completedBy: string, completedOn: string): OnboardingTask[] {
   return onboardingTaskTemplates.map((t) => {
     const status = doneIds.includes(t.id) ? "Completed" : inProgressIds.includes(t.id) ? "In Progress" : "Pending";
     return {
@@ -68,7 +68,7 @@ interface DocState {
   signedOn?: string;
 }
 
-function buildDocuments(caseId: string, states: Record<string, Partial<DocState>>): OnboardingDocument[] {
+export function buildDocuments(caseId: string, states: Record<string, Partial<DocState>>): OnboardingDocument[] {
   return onboardingDocumentTemplates.map((d) => {
     const s = states[d.id] ?? {};
     return {

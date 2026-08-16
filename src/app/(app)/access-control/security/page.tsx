@@ -9,6 +9,7 @@ import { Badge } from "@/components/ui/badge";
 import { EmptyRow, TBody, Td, Th, THead, Table, Tr } from "@/components/ui/table";
 import { Can } from "@/components/auth/permission-gate";
 import { useAccessControl } from "@/lib/access-control-context";
+import { useSite } from "@/lib/site-context";
 import { useNow } from "@/lib/use-now";
 import { downloadCsv } from "@/lib/utils";
 import type { SecurityEventType } from "@/lib/types";
@@ -47,17 +48,32 @@ const eventTone: Record<SecurityEventType, "emerald" | "rose" | "amber" | "indig
 
 export default function AccessControlSecurityPage() {
   const { accounts, securityEvents, unlockAccount } = useAccessControl();
+  const { mappedSites, isSuperAdmin } = useSite();
   const [typeFilter, setTypeFilter] = useState("All Events");
   const now = useNow();
 
-  const lockedAccounts = accounts.filter(
+  // Site-scoped for everyone but Super Admin — previously showed (and let a
+  // Site/HR Admin export) every account's lock state and every security
+  // event across every site, regardless of their own site mapping (Phase 17
+  // fix, same class of gap as access-control/users/page.tsx).
+  const scopedSiteIds = useMemo(() => new Set(mappedSites.map((s) => s.id)), [mappedSites]);
+  const scopedAccounts = useMemo(
+    () => (isSuperAdmin ? accounts : accounts.filter((a) => a.siteIds.some((id) => scopedSiteIds.has(id)))),
+    [accounts, isSuperAdmin, scopedSiteIds],
+  );
+  const scopedAccountIds = useMemo(() => new Set(scopedAccounts.map((a) => a.id)), [scopedAccounts]);
+
+  const lockedAccounts = scopedAccounts.filter(
     (a) => a.lockedUntil && now !== null && new Date(a.lockedUntil).getTime() > now,
   );
 
   const filteredEvents = useMemo(
     () =>
-      securityEvents.filter((e) => typeFilter === "All Events" || eventLabels[e.type] === typeFilter).slice(0, 100),
-    [securityEvents, typeFilter],
+      securityEvents
+        .filter((e) => isSuperAdmin || !e.accountId || scopedAccountIds.has(e.accountId))
+        .filter((e) => typeFilter === "All Events" || eventLabels[e.type] === typeFilter)
+        .slice(0, 100),
+    [securityEvents, typeFilter, isSuperAdmin, scopedAccountIds],
   );
 
   function exportLog() {

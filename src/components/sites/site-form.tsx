@@ -8,9 +8,12 @@ import { Field, Input, Select } from "@/components/ui/form";
 import { SiteLogo } from "@/components/ui/site-logo";
 import { cn } from "@/lib/utils";
 import { packageFeatures, siteStatuses } from "@/lib/mock-data";
-import type { PackagePlan, Site, SiteStatus } from "@/lib/types";
+import { timezoneOptions } from "@/lib/settings-data";
+import { siteTypes } from "@/lib/types";
+import type { PackagePlan, Site, SiteStatus, SiteType } from "@/lib/types";
 
 const logoColors = ["#4f46e5", "#0ea5e9", "#f59e0b", "#10b981", "#e11d48", "#7c3aed"];
+const currencyOptions = ["INR (₹)", "USD ($)", "EUR (€)", "GBP (£)", "AED (د.إ)", "SGD ($)"];
 
 interface SiteFormProps {
   initial?: Site;
@@ -23,14 +26,30 @@ export function SiteForm({ initial, onSubmit, submitLabel }: SiteFormProps) {
   const [logoColor, setLogoColor] = useState(initial?.logoColor ?? logoColors[0]);
   const [pkg, setPkg] = useState<PackagePlan>(initial?.package ?? "Professional");
   const [status, setStatus] = useState<SiteStatus>(initial?.status ?? "Trial");
+  const [siteType, setSiteType] = useState<SiteType>(initial?.siteType ?? "Corporate Office");
+  const [timezone, setTimezone] = useState(initial?.timezone ?? timezoneOptions[0]);
+  const [currency, setCurrency] = useState(initial?.currency ?? currencyOptions[0]);
 
   function handleSubmit(e: FormEvent<HTMLFormElement>) {
     e.preventDefault();
     const form = new FormData(e.currentTarget);
+    // Spread `initial` first so fields this form doesn't render (e.g.
+    // onboardingCompletedOn) are preserved on edit rather than silently
+    // dropped — the previous version rebuilt the object from scratch and
+    // lost legalName/siteType/industry/email/phone/timezone/currency on
+    // every save (Phase 2 gap, fixed in Phase 17).
     const site: Site = {
+      ...initial,
       id: initial?.id ?? `site-${Date.now()}`,
       name,
       code: String(form.get("code") ?? ""),
+      legalName: String(form.get("legalName") ?? "") || undefined,
+      siteType,
+      industry: String(form.get("industry") ?? "") || undefined,
+      email: String(form.get("email") ?? "") || undefined,
+      phone: String(form.get("phone") ?? "") || undefined,
+      timezone,
+      currency,
       logoColor,
       addressLine1: String(form.get("addressLine1") ?? ""),
       city: String(form.get("city") ?? ""),
@@ -83,6 +102,45 @@ export function SiteForm({ initial, onSubmit, submitLabel }: SiteFormProps) {
             </Field>
             <Field label="Site Code">
               <Input name="code" required defaultValue={initial?.code} placeholder="e.g. PUN-01" />
+            </Field>
+            <Field label="Legal Name">
+              <Input name="legalName" defaultValue={initial?.legalName} placeholder="Registered legal entity name" />
+            </Field>
+            <Field label="Site Type">
+              <Select value={siteType} onChange={(e) => setSiteType(e.target.value as SiteType)}>
+                {siteTypes.map((t) => (
+                  <option key={t} value={t}>
+                    {t}
+                  </option>
+                ))}
+              </Select>
+            </Field>
+            <Field label="Industry">
+              <Input name="industry" defaultValue={initial?.industry} placeholder="e.g. Manufacturing" />
+            </Field>
+            <Field label="Email">
+              <Input name="email" type="email" defaultValue={initial?.email} placeholder="site@company.com" />
+            </Field>
+            <Field label="Phone">
+              <Input name="phone" defaultValue={initial?.phone} placeholder="+91 90000 00000" />
+            </Field>
+            <Field label="Timezone">
+              <Select value={timezone} onChange={(e) => setTimezone(e.target.value)}>
+                {timezoneOptions.map((t) => (
+                  <option key={t} value={t}>
+                    {t}
+                  </option>
+                ))}
+              </Select>
+            </Field>
+            <Field label="Currency">
+              <Select value={currency} onChange={(e) => setCurrency(e.target.value)}>
+                {currencyOptions.map((c) => (
+                  <option key={c} value={c}>
+                    {c}
+                  </option>
+                ))}
+              </Select>
             </Field>
           </div>
         </CardContent>

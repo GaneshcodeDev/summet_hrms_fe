@@ -54,6 +54,8 @@ interface AccessControlContextValue {
   currentRoles: Role[];
   currentUser: ResolvedUser;
   isSuperAdmin: boolean;
+  /** False until the session cookie has been checked at least once on the client — gate rendering on this, not on canModule/canFeature, to avoid an "Access Restricted" flash. */
+  sessionResolved: boolean;
 
   canFeature: (featureId: string, action: PermissionAction) => boolean;
   canModule: (module: PermissionModule, action: PermissionAction) => boolean;
@@ -125,11 +127,21 @@ export function AccessControlProvider({ children }: { children: ReactNode }) {
   );
 
   const [sessionAccountId, setSessionAccountId] = useState<string | undefined>(undefined);
+  // Distinguishes "haven't checked the session cookie yet" from "checked it
+  // and there's no account" — getSession() only works client-side (reads
+  // document.cookie), so the very first render (both the SSR pass and the
+  // initial client hydration pass) can never know the real session yet.
+  // Without this flag, AccessGuard briefly saw an unauthenticated
+  // currentAccount and flashed "Access Restricted" before this effect ran
+  // (~300ms). Now it renders a neutral loading state until the first real
+  // check completes.
+  const [sessionResolved, setSessionResolved] = useState(false);
 
   useEffect(() => {
     function checkSession(): boolean {
       const session = getSession();
       setSessionAccountId(session?.accountId);
+      setSessionResolved(true);
       return Boolean(session);
     }
     if (!checkSession()) {
@@ -229,26 +241,43 @@ export function AccessControlProvider({ children }: { children: ReactNode }) {
     [currentUser.name],
   );
 
-  const updateRole = useCallback<AccessControlContextValue["updateRole"]>((id, patch) => {
-    rolesStore.update((rs) => rs.map((r) => (r.id === id ? { ...r, ...patch } : r)));
-  }, []);
+  // Roles/permissions are global (not site-scoped), and setRoleFeatureActions
+  // in particular is a direct privilege-escalation vector (it can grant any
+  // role — including one's own — "manage" on anything), so these three
+  // independently require access-control.roles/permissions "edit"/"manage"
+  // rather than trusting the Roles/Permissions page's own <Can> gating
+  // (section 6). Super Admin is exempt via canFeature's own bypass.
+  const updateRole = useCallback<AccessControlContextValue["updateRole"]>(
+    (id, patch) => {
+      if (!canFeature("access-control.roles", "edit") && !canFeature("access-control.roles", "manage")) return;
+      rolesStore.update((rs) => rs.map((r) => (r.id === id ? { ...r, ...patch } : r)));
+    },
+    [canFeature],
+  );
 
-  const deleteRole = useCallback<AccessControlContextValue["deleteRole"]>((id) => {
-    const role = rolesStore.getSnapshot().find((r) => r.id === id);
-    if (!role) return { ok: false };
-    if (role.isSystem) return { ok: false, reason: "system" };
-    if (accountsStore.getSnapshot().some((a) => a.roleIds.includes(id))) return { ok: false, reason: "in_use" };
-    rolesStore.update((rs) => rs.filter((r) => r.id !== id));
-    rolePermissionsStore.update((rp) => {
-      const next = { ...rp };
-      delete next[id];
-      return next;
-    });
-    return { ok: true };
-  }, []);
+  const deleteRole = useCallback<AccessControlContextValue["deleteRole"]>(
+    (id) => {
+      if (!canFeature("access-control.roles", "delete") && !canFeature("access-control.roles", "manage")) {
+        return { ok: false };
+      }
+      const role = rolesStore.getSnapshot().find((r) => r.id === id);
+      if (!role) return { ok: false };
+      if (role.isSystem) return { ok: false, reason: "system" };
+      if (accountsStore.getSnapshot().some((a) => a.roleIds.includes(id))) return { ok: false, reason: "in_use" };
+      rolesStore.update((rs) => rs.filter((r) => r.id !== id));
+      rolePermissionsStore.update((rp) => {
+        const next = { ...rp };
+        delete next[id];
+        return next;
+      });
+      return { ok: true };
+    },
+    [canFeature],
+  );
 
   const setRoleFeatureActions = useCallback<AccessControlContextValue["setRoleFeatureActions"]>(
     (roleId, featureId, actions) => {
+      if (!canFeature("access-control.permissions", "edit") && !canFeature("access-control.permissions", "manage")) return;
       rolePermissionsStore.update((rp) => ({
         ...rp,
         [roleId]: { ...rp[roleId], [featureId]: actions },
@@ -261,14 +290,27 @@ export function AccessControlProvider({ children }: { children: ReactNode }) {
         ip: "—",
       });
     },
-    [currentUser.name],
+    [currentUser.name, canFeature],
   );
 
   const createAccount = useCallback<AccessControlContextValue["createAccount"]>(
     ({ employeeId, roleIds, siteIds, password }) => {
+      // Data-layer authorization, independent of the "Add User" button being
+      // hidden for the wrong role (section 6): a non-Super-Admin can only
+      // create an account for an employee at one of their own mapped sites,
+      // and can only grant access to sites they themselves can reach. Uses
+      // currentAccount.siteIds directly rather than the Site module's
+      // mappedSites — SiteProvider is a descendant of AccessControlProvider
+      // in the tree (see layout.tsx), so this context can't call useSite().
+      if (!isSuperAdmin && !canFeature("access-control.users", "create")) return undefined;
       const employee = findEmployeeByEmployeeId(employeeId);
       if (!employee) return undefined;
       if (accountsStore.getSnapshot().some((a) => a.employeeId === employeeId)) return undefined;
+      if (!isSuperAdmin) {
+        const callerSites = currentAccount?.siteIds ?? [];
+        if (!callerSites.includes(employee.siteId)) return undefined;
+        if (siteIds.some((id) => !callerSites.includes(id))) return undefined;
+      }
 
       const tempPassword = password?.trim() || generateTempPassword();
       const account: UserAccount = {
@@ -294,11 +336,29 @@ export function AccessControlProvider({ children }: { children: ReactNode }) {
       });
       return { account, tempPassword };
     },
-    [currentUser.name],
+    [currentUser.name, isSuperAdmin, canFeature, currentAccount],
+  );
+
+  // Shared data-layer guard for every account mutation below (section 6) —
+  // previously these had NO independent check at all (not even a feature
+  // permission, let alone site scope), relying entirely on the "Roles" /
+  // "Deactivate" / "Unlock" buttons being hidden by <Can> in the UI. A
+  // non-Super-Admin may only act on an account whose OWN site overlaps
+  // their mapped sites, and only with the matching feature action granted.
+  const canActOnAccount = useCallback(
+    (accountId: string, action: PermissionAction) => {
+      if (isSuperAdmin) return true;
+      if (!canFeature("access-control.users", action) && !canFeature("access-control.users", "manage")) return false;
+      const target = findAccountById(accountId);
+      const callerSites = currentAccount?.siteIds ?? [];
+      return Boolean(target && target.siteIds.some((id) => callerSites.includes(id)));
+    },
+    [isSuperAdmin, canFeature, currentAccount],
   );
 
   const setAccountRoles = useCallback<AccessControlContextValue["setAccountRoles"]>(
     (accountId, roleIds) => {
+      if (!canActOnAccount(accountId, "edit")) return;
       updateAccount(accountId, { roleIds });
       const account = findAccountById(accountId);
       logSecurityEvent({
@@ -309,11 +369,12 @@ export function AccessControlProvider({ children }: { children: ReactNode }) {
         ip: "—",
       });
     },
-    [currentUser.name],
+    [currentUser.name, canActOnAccount],
   );
 
   const setAccountStatus = useCallback<AccessControlContextValue["setAccountStatus"]>(
     (accountId, status) => {
+      if (!canActOnAccount(accountId, "manage")) return;
       updateAccount(accountId, { status });
       const account = findAccountById(accountId);
       logSecurityEvent({
@@ -324,11 +385,12 @@ export function AccessControlProvider({ children }: { children: ReactNode }) {
         ip: "—",
       });
     },
-    [currentUser.name],
+    [currentUser.name, canActOnAccount],
   );
 
   const unlockAccount = useCallback<AccessControlContextValue["unlockAccount"]>(
     (accountId) => {
+      if (!canActOnAccount(accountId, "manage")) return;
       updateAccount(accountId, { lockedUntil: undefined, failedLoginAttempts: 0 });
       const account = findAccountById(accountId);
       logSecurityEvent({
@@ -339,12 +401,21 @@ export function AccessControlProvider({ children }: { children: ReactNode }) {
         ip: "—",
       });
     },
-    [currentUser.name],
+    [currentUser.name, canActOnAccount],
   );
 
-  const revokeDeviceSession = useCallback<AccessControlContextValue["revokeDeviceSession"]>((sessionId) => {
-    deviceSessionsStore.update((sessions) => sessions.filter((s) => s.id !== sessionId));
-  }, []);
+  // A user may only revoke their OWN device sessions (the only path the UI
+  // exposes — see employees/[id]/page.tsx's Security tab); Super Admin can
+  // revoke any, for real incident response.
+  const revokeDeviceSession = useCallback<AccessControlContextValue["revokeDeviceSession"]>(
+    (sessionId) => {
+      const session = deviceSessionsStore.getSnapshot().find((s) => s.id === sessionId);
+      if (!session) return;
+      if (!isSuperAdmin && session.accountId !== currentAccount?.id) return;
+      deviceSessionsStore.update((sessions) => sessions.filter((s) => s.id !== sessionId));
+    },
+    [isSuperAdmin, currentAccount],
+  );
 
   const value = useMemo<AccessControlContextValue>(
     () => ({
@@ -357,6 +428,7 @@ export function AccessControlProvider({ children }: { children: ReactNode }) {
       currentRoles,
       currentUser,
       isSuperAdmin,
+      sessionResolved,
       canFeature,
       canModule,
       addRole,
@@ -379,6 +451,7 @@ export function AccessControlProvider({ children }: { children: ReactNode }) {
       currentRoles,
       currentUser,
       isSuperAdmin,
+      sessionResolved,
       canFeature,
       canModule,
       addRole,

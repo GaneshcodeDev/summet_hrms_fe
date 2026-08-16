@@ -16,6 +16,18 @@ import {
   Cake,
   LogOut,
   ArrowUpRight,
+  UserCog,
+  BellRing,
+  ClipboardCheck,
+  Target,
+  Star,
+  GraduationCap,
+  CalendarClock,
+  Laptop,
+  Wrench,
+  CheckCircle2,
+  Receipt,
+  Plane,
 } from "lucide-react";
 import { useMemo } from "react";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
@@ -34,15 +46,26 @@ import { useRegularization } from "@/lib/regularization-context";
 import { useOrg } from "@/lib/org-context";
 import { useOffboarding } from "@/lib/offboarding-context";
 import { useSiteConfig } from "@/lib/site-config-context";
+import { usePerformance } from "@/lib/performance-context";
+import { useTraining } from "@/lib/training-context";
+import { getTrainingCompletionSummary } from "@/lib/training-engine";
+import { useAssets } from "@/lib/asset-context";
+import { getAssetInventorySummary } from "@/lib/asset-engine";
+import { useExpense } from "@/lib/expense-context";
+import { getExpenseSummary, getTravelSummary } from "@/lib/expense-engine";
 import { loadDemoData } from "@/lib/demo-seed";
 import {
+  currentCycleCaseFor,
   getAttendanceTrend,
+  getCycleCompletionSummary,
   getDepartmentDistribution,
   getExitSummary,
   getLeaveSummaryForDate,
   getNewJoiners,
+  getProbationSummary,
   getRecentActivity,
   getSiteEmployeeStats,
+  getTeamReviewSummary,
   getUpcomingEvents,
   countSiteDepartments,
 } from "@/lib/dashboard-selectors";
@@ -246,6 +269,10 @@ function SiteDashboard() {
   const { regularizations, visibleTeamRequests: visibleRegularizations } = useRegularization();
   const { orgUnits } = useOrg();
   const { visibleCases } = useOffboarding();
+  const { reviewCases } = usePerformance();
+  const { programs: trainingPrograms, enrollments: trainingEnrollments, visibleRequests: visibleTrainingRequests } = useTraining();
+  const { assets, activeAssignmentsForEmployee, visibleRequests: visibleAssetRequests } = useAssets();
+  const { expenseClaims, travelRequests, hasBroadClaimScope, hasBroadTravelScope } = useExpense();
 
   const today = todayStr();
   const siteEmployees = useMemo(() => employees.filter((e) => e.siteId === currentSiteId), [employees, currentSiteId]);
@@ -259,6 +286,24 @@ function SiteDashboard() {
   const newJoiners = useMemo(() => getNewJoiners(siteEmployees), [siteEmployees]);
   const siteCases = useSiteFilter(visibleCases());
   const exitSummary = useMemo(() => getExitSummary(siteCases), [siteCases]);
+  const probationSummary = useMemo(() => getProbationSummary(siteEmployees), [siteEmployees]);
+  const siteReviewCases = useMemo(() => reviewCases.filter((c) => c.siteId === currentSiteId), [reviewCases, currentSiteId]);
+  const cycleSummary = useMemo(() => getCycleCompletionSummary(siteReviewCases), [siteReviewCases]);
+  const siteTrainingPrograms = useMemo(() => trainingPrograms.filter((p) => p.siteId === currentSiteId), [trainingPrograms, currentSiteId]);
+  const siteTrainingEnrollments = useMemo(() => trainingEnrollments.filter((e) => e.siteId === currentSiteId), [trainingEnrollments, currentSiteId]);
+  const trainingCompletion = useMemo(() => getTrainingCompletionSummary(siteTrainingEnrollments), [siteTrainingEnrollments]);
+  const pendingTrainingRequests = useMemo(() => visibleTrainingRequests().filter((r) => r.siteId === currentSiteId && r.status === "Pending").length, [visibleTrainingRequests, currentSiteId]);
+  const siteAssets = useMemo(() => assets.filter((a) => a.siteId === currentSiteId), [assets, currentSiteId]);
+  const assetSummary = useMemo(() => getAssetInventorySummary(siteAssets), [siteAssets]);
+  const pendingAssetReturns = useMemo(
+    () => siteEmployees.filter((e) => e.employmentStage === "On Notice").reduce((sum, e) => sum + activeAssignmentsForEmployee(e.employeeId).length, 0),
+    [siteEmployees, activeAssignmentsForEmployee],
+  );
+  const pendingAssetRequests = useMemo(() => visibleAssetRequests().filter((r) => r.siteId === currentSiteId && r.status === "Pending").length, [visibleAssetRequests, currentSiteId]);
+  const siteExpenseClaims = useMemo(() => expenseClaims.filter((c) => c.siteId === currentSiteId), [expenseClaims, currentSiteId]);
+  const siteTravelRequests = useMemo(() => travelRequests.filter((r) => r.siteId === currentSiteId), [travelRequests, currentSiteId]);
+  const expenseSummary = useMemo(() => getExpenseSummary(siteExpenseClaims), [siteExpenseClaims]);
+  const travelSummary = useMemo(() => getTravelSummary(siteTravelRequests), [siteTravelRequests]);
   const departmentDistribution = useMemo(() => getDepartmentDistribution(siteEmployees), [siteEmployees]);
   const attendanceTrend = useMemo(
     () => getAttendanceTrend(attendance.filter((r) => r.siteId === currentSiteId)),
@@ -305,6 +350,51 @@ function SiteDashboard() {
         <StatCard label="New Joiners (30d)" value={String(newJoiners.length)} icon={UserPlus} tone="emerald" />
         <StatCard label="Exiting (30d)" value={String(exitSummary.upcomingExits)} icon={LogOut} tone="rose" />
       </div>
+      <div className="grid grid-cols-1 gap-4 sm:grid-cols-4">
+        <StatCard label="On Probation" value={String(probationSummary.onProbation)} icon={UserCog} tone="amber" />
+        <StatCard label="Due for Confirmation" value={String(probationSummary.dueForConfirmationSoon)} icon={BellRing} tone="sky" />
+        <StatCard label="On Notice" value={String(exitSummary.inNoticePeriod)} icon={LogOut} tone="rose" />
+        <StatCard label="Recently Exited (30d)" value={String(exitSummary.recentlyExited)} icon={UserX} tone="indigo" />
+      </div>
+      <div className="grid grid-cols-1 gap-4 sm:grid-cols-3">
+        <StatCard label="Cycle Completion" value={`${cycleSummary.completionPct}%`} icon={ClipboardCheck} tone="emerald" />
+        <StatCard label="Pending Reviews" value={String(cycleSummary.pendingReviews)} icon={Target} tone="amber" />
+        <StatCard label="Employees Awaiting Review" value={String(cycleSummary.employeesAwaitingReview)} icon={UserCog} tone="rose" />
+      </div>
+      <div className="grid grid-cols-1 gap-4 sm:grid-cols-2 xl:grid-cols-4">
+        <StatCard label="Active Programs" value={String(siteTrainingPrograms.filter((p) => p.status !== "Cancelled" && p.status !== "Completed").length)} icon={GraduationCap} tone="indigo" />
+        <StatCard label="Employees in Training" value={String(trainingCompletion.inProgress)} icon={Users} tone="sky" />
+        <StatCard label="Pending Training Requests" value={String(pendingTrainingRequests)} icon={CalendarClock} tone="amber" />
+        <StatCard label="Training Completion %" value={`${trainingCompletion.completionPct}%`} icon={ClipboardCheck} tone="emerald" />
+      </div>
+      <div className="grid grid-cols-2 gap-4 sm:grid-cols-3 xl:grid-cols-6">
+        <StatCard label="Total Assets" value={String(assetSummary.total)} icon={Laptop} tone="indigo" trend={pendingAssetRequests > 0 ? `${pendingAssetRequests} pending request(s)` : undefined} />
+        <StatCard label="Available" value={String(assetSummary.available)} icon={CheckCircle2} tone="emerald" />
+        <StatCard label="Assigned" value={String(assetSummary.assigned)} icon={Users} tone="sky" />
+        <StatCard label="Maintenance" value={String(assetSummary.maintenance)} icon={Wrench} tone="amber" />
+        <StatCard label="Damaged" value={String(assetSummary.damaged)} icon={AlertTriangle} tone="rose" />
+        <StatCard label="Pending Returns" value={String(pendingAssetReturns)} icon={UserX} tone="rose" />
+      </div>
+      {(hasBroadClaimScope || hasBroadTravelScope) && (
+        <div className="grid grid-cols-2 gap-4 sm:grid-cols-4">
+          {hasBroadClaimScope && (
+            <>
+              <StatCard label="Pending Expense Approval" value={String(expenseSummary.pendingApproval)} icon={Receipt} tone="amber" />
+              <StatCard label="Approved for Reimbursement" value={String(expenseSummary.approvedForReimbursement)} icon={ClipboardCheck} tone="sky" />
+              <StatCard label="Reimbursed" value={`₹${expenseSummary.reimbursedAmount.toLocaleString("en-IN")}`} icon={Wallet} tone="emerald" />
+              <StatCard label="Outstanding Reimbursement" value={`₹${expenseSummary.outstandingAmount.toLocaleString("en-IN")}`} icon={AlertTriangle} tone="rose" />
+            </>
+          )}
+          {hasBroadTravelScope && !hasBroadClaimScope && (
+            <>
+              <StatCard label="Travel Requests" value={String(travelSummary.total)} icon={Plane} tone="indigo" />
+              <StatCard label="Approved Travel" value={String(travelSummary.approved)} icon={CheckCircle2} tone="emerald" />
+              <StatCard label="Rejected Travel" value={String(travelSummary.rejected)} icon={AlertTriangle} tone="rose" />
+              <StatCard label="Estimated Travel Cost" value={`₹${travelSummary.estimatedCost.toLocaleString("en-IN")}`} icon={Wallet} tone="sky" />
+            </>
+          )}
+        </div>
+      )}
 
       <div className="grid grid-cols-1 gap-4 xl:grid-cols-3">
         <Card className="xl:col-span-2">
@@ -393,6 +483,10 @@ function TeamDashboard() {
   const { recordFor } = useAttendance();
   const { visibleTeamRequests: visibleLeaveRequests, requestsFor: leaveRequestsFor } = useLeave();
   const { visibleTeamRequests: visibleRegularizations } = useRegularization();
+  const { reviewCases } = usePerformance();
+  const { enrollmentsForEmployee, visibleRequests: visibleTrainingRequests, trainingNeedsFor } = useTraining();
+  const { activeAssignmentsForEmployee, visibleRequests: visibleAssetRequests } = useAssets();
+  const { visibleTeamTravelRequests, visibleTeamClaims, hasBroadClaimScope, expenseClaims } = useExpense();
 
   const today = todayStr();
   const team = useMemo(
@@ -406,6 +500,35 @@ function TeamDashboard() {
   const summary = summarizeAttendance(teamAttendanceToday);
   const pendingLeave = visibleLeaveRequests().filter((r) => r.status === "Pending").length;
   const pendingRegularizations = visibleRegularizations().filter((r) => r.status === "Pending").length;
+  const teamReviewCases = useMemo(
+    () => reviewCases.filter((c) => team.some((m) => m.employeeId === c.employeeId)),
+    [reviewCases, team],
+  );
+  const teamReviewSummary = useMemo(() => getTeamReviewSummary(teamReviewCases), [teamReviewCases]);
+  const teamInTraining = useMemo(
+    () => team.reduce((sum, m) => sum + enrollmentsForEmployee(m.employeeId).filter((e) => e.status === "Registered" || e.status === "Approved" || e.status === "In Progress").length, 0),
+    [team, enrollmentsForEmployee],
+  );
+  const pendingTeamTraining = useMemo(
+    () => visibleTrainingRequests().filter((r) => r.status === "Pending" && team.some((m) => m.employeeId === r.employeeId)).length,
+    [visibleTrainingRequests, team],
+  );
+  const teamSkillGaps = useMemo(() => team.reduce((sum, m) => sum + trainingNeedsFor(m.employeeId).length, 0), [team, trainingNeedsFor]);
+  const teamAssetsCount = useMemo(() => team.reduce((sum, m) => sum + activeAssignmentsForEmployee(m.employeeId).length, 0), [team, activeAssignmentsForEmployee]);
+  const pendingTeamAssetRequests = useMemo(
+    () => visibleAssetRequests().filter((r) => r.status === "Pending" && team.some((m) => m.employeeId === r.employeeId)).length,
+    [visibleAssetRequests, team],
+  );
+  const pendingTeamTravel = useMemo(
+    () => visibleTeamTravelRequests().filter((r) => r.status === "Pending" && team.some((m) => m.employeeId === r.employeeId)).length,
+    [visibleTeamTravelRequests, team],
+  );
+  const pendingTeamClaims = useMemo(
+    () => visibleTeamClaims().filter((c) => team.some((m) => m.employeeId === c.employeeId)).length,
+    [visibleTeamClaims, team],
+  );
+  const siteScopedClaims = useSiteFilter(expenseClaims);
+  const financeExpenseSummary = useMemo(() => getExpenseSummary(siteScopedClaims), [siteScopedClaims]);
 
   return (
     <div className="space-y-6">
@@ -419,7 +542,30 @@ function TeamDashboard() {
         <StatCard label="Late Today" value={String(summary.late)} icon={Clock} tone="amber" />
         <StatCard label="Pending Leave Approvals" value={String(pendingLeave)} icon={CalendarOff} tone="sky" />
         <StatCard label="Pending Regularizations" value={String(pendingRegularizations)} icon={AlertTriangle} tone="amber" />
+        <StatCard label="Team Reviews Pending" value={String(teamReviewSummary.pendingReviews)} icon={Target} tone="rose" trend={`${teamReviewSummary.completionPct}% complete`} />
       </div>
+      <div className="grid grid-cols-1 gap-4 sm:grid-cols-3">
+        <StatCard label="Team in Training" value={String(teamInTraining)} icon={GraduationCap} tone="indigo" />
+        <StatCard label="Pending Team Training" value={String(pendingTeamTraining)} icon={CalendarClock} tone="amber" />
+        <StatCard label="Skill Gaps" value={String(teamSkillGaps)} icon={ClipboardCheck} tone="rose" />
+      </div>
+      <div className="grid grid-cols-1 gap-4 sm:grid-cols-2">
+        <StatCard label="Team Assets" value={String(teamAssetsCount)} icon={Laptop} tone="indigo" />
+        <StatCard label="Pending Asset Requests" value={String(pendingTeamAssetRequests)} icon={AlertTriangle} tone="amber" />
+      </div>
+      {hasBroadClaimScope ? (
+        <div className="grid grid-cols-2 gap-4 sm:grid-cols-4">
+          <StatCard label="Pending Expense Approval" value={String(financeExpenseSummary.pendingApproval)} icon={Receipt} tone="amber" />
+          <StatCard label="Approved for Reimbursement" value={String(financeExpenseSummary.approvedForReimbursement)} icon={ClipboardCheck} tone="sky" />
+          <StatCard label="Reimbursed" value={`₹${financeExpenseSummary.reimbursedAmount.toLocaleString("en-IN")}`} icon={Wallet} tone="emerald" />
+          <StatCard label="Outstanding Reimbursement" value={`₹${financeExpenseSummary.outstandingAmount.toLocaleString("en-IN")}`} icon={AlertTriangle} tone="rose" />
+        </div>
+      ) : (
+        <div className="grid grid-cols-1 gap-4 sm:grid-cols-2">
+          <StatCard label="Team Travel Pending" value={String(pendingTeamTravel)} icon={Plane} tone="amber" />
+          <StatCard label="Team Claims Pending" value={String(pendingTeamClaims)} icon={Receipt} tone="amber" />
+        </div>
+      )}
 
       <Card>
         <CardHeader>
@@ -466,6 +612,10 @@ function EmployeeDashboard() {
   const { balancesFor, requestsFor: leaveRequestsFor } = useLeave();
   const { requestsFor: regularizationRequestsFor } = useRegularization();
   const { configForSite } = useSiteConfig();
+  const { cycles: performanceCycles, reviewCases: performanceReviewCases, goalsFor: performanceGoalsFor } = usePerformance();
+  const { enrollmentsForEmployee, requestsFor: trainingRequestsFor } = useTraining();
+  const { activeAssignmentsForEmployee, requestsFor: assetRequestsFor } = useAssets();
+  const { requestsFor: travelRequestsFor, claimsFor } = useExpense();
 
   const today = todayStr();
   const monthPrefix = today.slice(0, 7);
@@ -488,6 +638,18 @@ function EmployeeDashboard() {
   ]
     .sort((a, b) => (a.date < b.date ? 1 : -1))
     .slice(0, 8);
+  const myCase = useMemo(
+    () => currentCycleCaseFor(currentUser.employeeId, performanceCycles, performanceReviewCases),
+    [currentUser.employeeId, performanceCycles, performanceReviewCases],
+  );
+  const myCycle = myCase ? performanceCycles.find((c) => c.id === myCase.cycleId) : undefined;
+  const myGoalCount = myCase ? performanceGoalsFor(currentUser.employeeId, myCase.cycleId).length : 0;
+  const myTrainingEnrollments = enrollmentsForEmployee(currentUser.employeeId);
+  const myTrainingRequests = trainingRequestsFor(currentUser.employeeId);
+  const myAssets = activeAssignmentsForEmployee(currentUser.employeeId);
+  const myAssetRequests = assetRequestsFor(currentUser.employeeId);
+  const myTravelRequests = travelRequestsFor(currentUser.employeeId);
+  const myExpenseSummary = useMemo(() => getExpenseSummary(claimsFor(currentUser.employeeId)), [claimsFor, currentUser.employeeId]);
 
   return (
     <div className="space-y-6">
@@ -513,6 +675,29 @@ function EmployeeDashboard() {
         <StatCard label="Present Days (This Month)" value={String(monthSummary.present)} icon={UserCheck} tone="emerald" />
         <StatCard label="Pending Leave Requests" value={String(pendingLeave.length)} icon={CalendarOff} tone="sky" />
         <StatCard label="Pending Regularizations" value={String(pendingRegularizations.length)} icon={AlertTriangle} tone="amber" />
+      </div>
+
+      <div className="grid grid-cols-1 gap-4 sm:grid-cols-2 xl:grid-cols-4">
+        <StatCard label="Current Cycle" value={myCycle?.name ?? "—"} icon={Target} tone="indigo" trend={myCase ? undefined : "No goals assigned yet"} />
+        <StatCard label="My Goals" value={String(myGoalCount)} icon={ClipboardCheck} tone="sky" />
+        <StatCard label="Review Status" value={myCase?.stage ?? "—"} icon={UserCog} tone="amber" />
+        <StatCard label="Current Rating" value={myCase?.finalScore !== undefined ? `${myCase.finalScore}/5` : "—"} icon={Star} tone="emerald" />
+      </div>
+      <div className="grid grid-cols-1 gap-4 sm:grid-cols-2 xl:grid-cols-4">
+        <StatCard label="My Training" value={String(myTrainingEnrollments.filter((e) => e.status !== "Cancelled").length)} icon={GraduationCap} tone="indigo" />
+        <StatCard label="Upcoming Training" value={String(myTrainingEnrollments.filter((e) => e.status === "Registered" || e.status === "Approved").length)} icon={CalendarClock} tone="sky" />
+        <StatCard label="Completed Training" value={String(myTrainingEnrollments.filter((e) => e.status === "Completed").length)} icon={ClipboardCheck} tone="emerald" />
+        <StatCard label="Pending Training Requests" value={String(myTrainingRequests.filter((r) => r.status === "Pending").length)} icon={AlertTriangle} tone="amber" />
+      </div>
+      <div className="grid grid-cols-1 gap-4 sm:grid-cols-2">
+        <StatCard label="My Assets" value={String(myAssets.length)} icon={Laptop} tone="indigo" />
+        <StatCard label="Pending Asset Requests" value={String(myAssetRequests.filter((r) => r.status === "Pending").length)} icon={AlertTriangle} tone="amber" />
+      </div>
+      <div className="grid grid-cols-1 gap-4 sm:grid-cols-2 xl:grid-cols-4">
+        <StatCard label="Pending Travel" value={String(myTravelRequests.filter((r) => r.status === "Pending").length)} icon={Plane} tone="amber" />
+        <StatCard label="Pending Claims" value={String(myExpenseSummary.pendingApproval)} icon={Receipt} tone="amber" />
+        <StatCard label="Approved Claims" value={String(myExpenseSummary.approvedForReimbursement + myExpenseSummary.reimbursed)} icon={ClipboardCheck} tone="sky" />
+        <StatCard label="Reimbursed Amount" value={`₹${myExpenseSummary.reimbursedAmount.toLocaleString("en-IN")}`} icon={Wallet} tone="emerald" />
       </div>
 
       <div className="grid grid-cols-1 gap-4 xl:grid-cols-3">

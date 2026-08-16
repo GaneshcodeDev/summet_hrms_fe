@@ -15,6 +15,7 @@ import { useAccessControl } from "@/lib/access-control-context";
 import { useMasters } from "@/lib/master-context";
 import { useSiteConfig } from "@/lib/site-config-context";
 import { useApprovals } from "@/lib/approval-context";
+import { useNotifications } from "@/lib/notification-context";
 import { resolveLeaveWorkflowSteps } from "@/lib/approval-engine";
 import {
   calculateLeaveDays,
@@ -200,6 +201,7 @@ export function LeaveProvider({ children }: { children: ReactNode }) {
   const { recordsOfType } = useMasters();
   const { configForSite } = useSiteConfig();
   const { instanceFor, canAct: canActOnInstance, createInstance, act: actOnInstance, recordMirroredAction } = useApprovals();
+  const { notify } = useNotifications();
 
   const leaveRequests = useSyncExternalStore(
     leaveRequestsStore.subscribe,
@@ -496,6 +498,15 @@ export function LeaveProvider({ children }: { children: ReactNode }) {
               ? `${request.type} fully approved for ${request.days} day(s)${decisionReason ? ` — ${decisionReason}` : ""}`
               : `${request.type} rejected — ${decisionReason}`,
         });
+        notify({
+          employeeId: request.employeeId,
+          type: finalStatus === "Approved" ? "success" : "warning",
+          title: `Leave ${finalStatus.toLowerCase()}`,
+          message: `Your ${request.type} request (${request.from} to ${request.to}) was ${finalStatus.toLowerCase()}${decisionReason ? ` — ${decisionReason}` : ""}.`,
+          module: "Leave",
+          recordId: id,
+          href: "/leave",
+        });
         return {
           ok: true,
           message:
@@ -554,6 +565,15 @@ export function LeaveProvider({ children }: { children: ReactNode }) {
             ? `${request.type} approved for ${request.days} day(s)${decisionReason ? ` — ${decisionReason}` : ""}`
             : `${request.type} rejected — ${decisionReason}`,
       });
+      notify({
+        employeeId: request.employeeId,
+        type: status === "Approved" ? "success" : "warning",
+        title: `Leave ${status.toLowerCase()}`,
+        message: `Your ${request.type} request (${request.from} to ${request.to}) was ${status.toLowerCase()}${decisionReason ? ` — ${decisionReason}` : ""}.`,
+        module: "Leave",
+        recordId: id,
+        href: "/leave",
+      });
 
       return {
         ok: true,
@@ -573,6 +593,7 @@ export function LeaveProvider({ children }: { children: ReactNode }) {
       instanceFor,
       actOnInstance,
       recordMirroredAction,
+      notify,
     ],
   );
 

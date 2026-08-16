@@ -5,9 +5,11 @@ import { notFound, useSearchParams } from "next/navigation";
 import Link from "next/link";
 import {
   AlertTriangle,
+  ArrowRightLeft,
   Briefcase,
   Calendar,
   Check,
+  Clock,
   Laptop,
   Lock,
   LogOut,
@@ -18,7 +20,10 @@ import {
   Plus,
   ShieldAlert,
   ShieldCheck,
+  TrendingUp,
   Trash2,
+  UserCog,
+  UserCheck,
 } from "lucide-react";
 import { Avatar } from "@/components/ui/avatar";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
@@ -26,8 +31,8 @@ import { Tabs } from "@/components/ui/tabs";
 import { Badge } from "@/components/ui/badge";
 import { StatusBadge } from "@/components/ui/status-badge";
 import { Button } from "@/components/ui/button";
-import { Field, Input, Select } from "@/components/ui/form";
-import { performanceReviews } from "@/lib/mock-data";
+import { Modal } from "@/components/ui/modal";
+import { Field, Input, Select, Textarea } from "@/components/ui/form";
 import { useSite } from "@/lib/site-context";
 import { useAccessControl } from "@/lib/access-control-context";
 import { useEmployees, type EmployeeEditable } from "@/lib/employee-context";
@@ -38,8 +43,17 @@ import { usePayroll } from "@/lib/payroll-context";
 import { useRegularization } from "@/lib/regularization-context";
 import { useOrg } from "@/lib/org-context";
 import { useMasters } from "@/lib/master-context";
+import { useEmployeeLifecycle } from "@/lib/employee-lifecycle-context";
+import { usePerformance } from "@/lib/performance-context";
+import { useSkills } from "@/lib/skills-context";
+import { useTraining } from "@/lib/training-context";
+import { useAssets } from "@/lib/asset-context";
+import { useExpense } from "@/lib/expense-context";
+import { calculateProbationEndDate } from "@/lib/lifecycle-engine";
+import { logLifecycleEvent } from "@/lib/lifecycle-store";
 import { useNow } from "@/lib/use-now";
-import { changePassword, getSession, revokeOtherSessions, revokeSession } from "@/lib/auth";
+import { getSession, revokeOtherSessions, revokeSession } from "@/lib/auth";
+import { ChangePasswordForm } from "@/components/auth/change-password-form";
 import type {
   BankAccountType,
   EmergencyContact,
@@ -47,9 +61,11 @@ import type {
   EmployeeBankDetail,
   EmployeeDocumentRecord,
   EmployeeDocumentStatus,
+  EmployeeSalaryStructure,
   Gender,
   MaritalStatus,
   Nominee,
+  SalaryLine,
   WorkExperience,
 } from "@/lib/types";
 
@@ -64,6 +80,9 @@ const baseTabs = [
   { id: "attendance", label: "Attendance" },
   { id: "leave", label: "Leave" },
   { id: "performance", label: "Performance" },
+  { id: "training", label: "Training" },
+  { id: "assets", label: "Assets" },
+  { id: "expenses", label: "Expenses" },
   { id: "timeline", label: "Timeline" },
 ];
 
@@ -96,7 +115,7 @@ const securityEventLabel: Record<string, string> = {
 
 function EmployeeProfileClient({ id }: { id: string }) {
   const searchParams = useSearchParams();
-  const { sites } = useSite();
+  const { sites, mappedSites: viewerMappedSites, isSuperAdmin } = useSite();
   const { currentUser: signedInUser, canFeature, deviceSessions, securityEvents } = useAccessControl();
   const {
     getEmployeeByEmployeeId,
@@ -115,12 +134,28 @@ function EmployeeProfileClient({ id }: { id: string }) {
   const { requestsFor: regularizationRequestsFor } = useRegularization();
   const { orgUnits } = useOrg();
   const { recordsOfType } = useMasters();
+  const { canManageLifecycle, canTransferCrossSite, eventsForEmployee, confirmEmployee, transferEmployee, promoteEmployee, changeManager, changeShift } =
+    useEmployeeLifecycle();
+  const { cycles: performanceCycles, reviewCases: performanceReviewCases, goalsFor: performanceGoalsFor, appraisalsFor, canManageAllReviews, isDirectManagerOf } =
+    usePerformance();
+  const { currentSkillsFor, skillHistoryFor, canAssessSkillFor, assessSkill, proposalsFor, decideSkillUpdateProposal } = useSkills();
+  const { enrollmentsForEmployee, requestsFor: trainingRequestsFor, programById: trainingProgramById } = useTraining();
+  const { assetById, activeAssignmentsForEmployee, assignmentsForEmployee: assetAssignmentsForEmployee, canManageAssets } = useAssets();
+  const { claimsFor: expenseClaimsFor, requestsFor: travelRequestsFor, hasBroadClaimScope, hasBroadTravelScope } = useExpense();
+  const [lifecycleModal, setLifecycleModal] = useState<null | "confirm" | "transfer" | "promote" | "manager" | "shift" | "revise-salary">(null);
   const now = useNow();
 
   const employee = getEmployeeByEmployeeId(id);
   if (!employee) notFound();
 
   const isOwnProfile = signedInUser.employeeId === employee.employeeId;
+  // Directory list rows are already site-filtered via useSiteFilter — this
+  // closes the same boundary for direct-URL access, so a Site A HR/Admin
+  // can't reach (and can't act on) a Site B employee's profile just by
+  // typing the URL. Super Admin and the employee's own profile are exempt.
+  if (!isOwnProfile && !isSuperAdmin && !viewerMappedSites.some((s) => s.id === employee.siteId)) {
+    notFound();
+  }
   const canViewBank = isOwnProfile || canFeature("payroll.bank", "view");
   const canViewSalary = isOwnProfile || canFeature("payroll.salary", "view");
   const canViewDocuments = isOwnProfile || canFeature("employees.documents", "view") || canManageDocuments;
@@ -136,6 +171,16 @@ function EmployeeProfileClient({ id }: { id: string }) {
     isOwnProfile ||
     hasBroadLeaveScope ||
     (isDirectManager && (canFeature("leave.requests", "approve") || canFeature("leave.requests", "reject")));
+  // Same shape as canViewEmployeeLeave — "performance.reviews: view" is
+  // broad/site-wide, so gate the tab itself to the employee, HR/site-scoped
+  // roles with real reach, or the employee's own direct manager.
+  const canViewEmployeePerformance = isOwnProfile || canManageAllReviews || isDirectManagerOf(employee.employeeId);
+  // Same shape again for the Training tab (skills + enrollments) — owner, HR/site-scoped roles with real reach, or the employee's own direct manager.
+  const canViewEmployeeTraining = isOwnProfile || canAssessSkillFor(employee.employeeId) || isDirectManagerOf(employee.employeeId);
+  // Same shape again for the Assets tab — owner, HR/site-scoped roles with real reach, or the employee's own direct manager.
+  const canViewEmployeeAssets = isOwnProfile || canManageAssets || isDirectManagerOf(employee.employeeId);
+  // Same shape again for the Expenses tab — owner, Finance/HR with broad claim or travel scope, or the employee's own direct manager.
+  const canViewEmployeeExpenses = isOwnProfile || hasBroadClaimScope || hasBroadTravelScope || isDirectManagerOf(employee.employeeId);
 
   const nameForOrgUnit = (unitId?: string) => (unitId ? orgUnits.find((u) => u.id === unitId)?.name : undefined);
   const nameForMaster = (type: Parameters<typeof recordsOfType>[0], recordId?: string) =>
@@ -156,11 +201,25 @@ function EmployeeProfileClient({ id }: { id: string }) {
       baseTabs[5],
       ...(canViewEmployeeLeave ? [baseTabs[6]] : []),
       ...(canViewProfileDetail ? [{ id: "experience", label: "Experience" }] : []),
-      baseTabs[7],
-      baseTabs[8],
+      ...(canViewEmployeePerformance ? [baseTabs[7]] : []),
+      ...(canViewEmployeeTraining ? [baseTabs[8]] : []),
+      ...(canViewEmployeeAssets ? [baseTabs[9]] : []),
+      ...(canViewEmployeeExpenses ? [baseTabs[10]] : []),
+      baseTabs[11],
       ...(isOwnProfile ? [{ id: "security", label: "Security" }] : []),
     ],
-    [canViewBank, canViewSalary, canViewDocuments, canViewProfileDetail, canViewEmployeeLeave, isOwnProfile],
+    [
+      canViewBank,
+      canViewSalary,
+      canViewDocuments,
+      canViewProfileDetail,
+      canViewEmployeeLeave,
+      canViewEmployeePerformance,
+      canViewEmployeeTraining,
+      canViewEmployeeAssets,
+      canViewEmployeeExpenses,
+      isOwnProfile,
+    ],
   );
 
   const initialTab = searchParams.get("tab");
@@ -174,7 +233,7 @@ function EmployeeProfileClient({ id }: { id: string }) {
 
   const documents = documentsFor(employee.employeeId);
   const bank = bankDetailFor(employee.employeeId);
-  const { salaryStructureFor } = usePayroll();
+  const { salaryStructureFor, salaryHistoryFor, canManageSalary, defaultSalaryLinesFor, saveSalaryStructure } = usePayroll();
   const salary = salaryStructureFor(employee.employeeId);
   const employeeLeaves = requestsFor(employee.employeeId);
   const employeeLeaveTypes = leaveTypesForSite(employee.siteId);
@@ -186,7 +245,16 @@ function EmployeeProfileClient({ id }: { id: string }) {
     [recordsForEmployee, employee.employeeId],
   );
   const attendanceSummary = useMemo(() => summarizeAttendance(employeeAttendance), [employeeAttendance]);
-  const review = performanceReviews.find((r) => r.employee === employee.name);
+  const employeeAppraisals = appraisalsFor(employee.employeeId);
+  const employeePerformanceCases = useMemo(
+    () =>
+      performanceReviewCases
+        .filter((c) => c.employeeId === employee.employeeId)
+        .map((c) => ({ case: c, cycle: performanceCycles.find((cy) => cy.id === c.cycleId) }))
+        .filter((entry) => entry.cycle)
+        .sort((a, b) => (a.cycle!.startDate < b.cycle!.startDate ? 1 : -1)),
+    [performanceReviewCases, performanceCycles, employee.employeeId],
+  );
 
   // Built only from real records already on file — no synthetic history.
   // Not memoized: the list is small (a handful of records per employee) and
@@ -213,6 +281,14 @@ function EmployeeProfileClient({ id }: { id: string }) {
       { date: d.uploadedOn, label: "Document uploaded", detail: d.documentType },
       ...(d.verifiedOn ? [{ date: d.verifiedOn, label: `Document ${d.status.toLowerCase()}`, detail: d.documentType }] : []),
     ]),
+    // Real lifecycle actions (Confirmed/Promoted/Transferred/Manager
+    // Changed/Shift Changed/Salary Revised/Notice Started/Exit Completed) —
+    // see employee-lifecycle-context.tsx / lifecycle-store.ts.
+    ...eventsForEmployee(employee.employeeId).map((e) => ({
+      date: e.date,
+      label: e.eventType,
+      detail: [e.previousValue && e.newValue ? `${e.previousValue} → ${e.newValue}` : e.newValue, e.comment].filter(Boolean).join(" · ") || undefined,
+    })),
   ].sort((a, b) => (a.date < b.date ? 1 : -1));
 
   const mySessions = isOwnProfile
@@ -324,7 +400,7 @@ function EmployeeProfileClient({ id }: { id: string }) {
             )}
 
             {active === "employment" && canViewProfileDetail && (
-              <CardContent>
+              <CardContent className="space-y-5">
                 <dl className="grid grid-cols-2 gap-y-4 text-sm">
                   <DL label="Employee Code" value={employee.employeeId} />
                   <DL label="Date of Joining" value={employee.dateOfJoining} />
@@ -332,10 +408,34 @@ function EmployeeProfileClient({ id }: { id: string }) {
                   <DL label="Employment Stage" value={employee.employmentStage} />
                   <DL label="Confirmation Date" value={employee.confirmationDate} />
                   <DL label="Probation Period" value={employee.probationPeriodMonths ? `${employee.probationPeriodMonths} month(s)` : undefined} />
+                  {employee.employmentStage === "Probation" && employee.probationPeriodMonths && (
+                    <DL label="Probation End Date" value={calculateProbationEndDate(employee.dateOfJoining, employee.probationPeriodMonths)} />
+                  )}
                   <DL label="Employment Type" value={nameForMaster("EmploymentType", employee.employmentTypeId)} />
                   <DL label="Employee Type" value={nameForMaster("EmployeeType", employee.employeeTypeId)} />
                   <DL label="Shift" value={nameForMaster("Shift", employee.shiftId)} />
                 </dl>
+                {canManageLifecycle && employee.employmentStage !== "Exited" && (
+                  <div className="flex flex-wrap gap-2 border-t border-slate-100 pt-4 dark:border-slate-800">
+                    {employee.employmentStage === "Probation" && (
+                      <Button size="sm" variant="outline" onClick={() => setLifecycleModal("confirm")}>
+                        <UserCheck className="h-3.5 w-3.5" /> Confirm
+                      </Button>
+                    )}
+                    <Button size="sm" variant="outline" onClick={() => setLifecycleModal("transfer")}>
+                      <ArrowRightLeft className="h-3.5 w-3.5" /> Transfer
+                    </Button>
+                    <Button size="sm" variant="outline" onClick={() => setLifecycleModal("promote")}>
+                      <TrendingUp className="h-3.5 w-3.5" /> Promote
+                    </Button>
+                    <Button size="sm" variant="outline" onClick={() => setLifecycleModal("manager")}>
+                      <UserCog className="h-3.5 w-3.5" /> Change Manager
+                    </Button>
+                    <Button size="sm" variant="outline" onClick={() => setLifecycleModal("shift")}>
+                      <Clock className="h-3.5 w-3.5" /> Change Shift
+                    </Button>
+                  </div>
+                )}
               </CardContent>
             )}
 
@@ -403,11 +503,18 @@ function EmployeeProfileClient({ id }: { id: string }) {
                   </p>
                 ) : (
                   <>
-                    <div className="rounded-xl bg-indigo-50 px-4 py-3 dark:bg-indigo-500/10">
-                      <p className="text-xs text-indigo-500 dark:text-indigo-400/80">Annual CTC</p>
-                      <p className="text-xl font-bold text-indigo-700 dark:text-indigo-400">
-                        ₹{salary.ctcAnnual.toLocaleString("en-IN")}
-                      </p>
+                    <div className="flex items-start justify-between gap-4">
+                      <div className="rounded-xl bg-indigo-50 px-4 py-3 dark:bg-indigo-500/10">
+                        <p className="text-xs text-indigo-500 dark:text-indigo-400/80">Annual CTC (effective {salary.effectiveFrom})</p>
+                        <p className="text-xl font-bold text-indigo-700 dark:text-indigo-400">
+                          ₹{salary.ctcAnnual.toLocaleString("en-IN")}
+                        </p>
+                      </div>
+                      {canManageSalary && (
+                        <Button size="sm" variant="outline" onClick={() => setLifecycleModal("revise-salary")}>
+                          <TrendingUp className="h-3.5 w-3.5" /> Revise Salary
+                        </Button>
+                      )}
                     </div>
                     <div className="grid grid-cols-2 gap-6">
                       <div>
@@ -438,6 +545,38 @@ function EmployeeProfileClient({ id }: { id: string }) {
                       </div>
                     </div>
                   </>
+                )}
+
+                {salaryHistoryFor(employee.employeeId).length > 1 && (
+                  <div className="border-t border-slate-100 pt-4 dark:border-slate-800">
+                    <h3 className="mb-2 text-sm font-semibold text-slate-800 dark:text-slate-100">Salary History</h3>
+                    <div className="divide-y divide-slate-100 dark:divide-slate-800">
+                      {salaryHistoryFor(employee.employeeId)
+                        .slice()
+                        .reverse()
+                        .map((s, i, arr) => {
+                          const previous = arr[i + 1];
+                          return (
+                            <div key={s.id} className="flex items-center justify-between py-2.5 text-sm">
+                              <div>
+                                <p className="font-medium text-slate-700 dark:text-slate-200">
+                                  ₹{s.ctcAnnual.toLocaleString("en-IN")}
+                                  {previous && (
+                                    <span className="ml-2 text-xs font-normal text-slate-400 dark:text-slate-500">
+                                      (was ₹{previous.ctcAnnual.toLocaleString("en-IN")})
+                                    </span>
+                                  )}
+                                </p>
+                                <p className="text-xs text-slate-400 dark:text-slate-500">
+                                  Effective {s.effectiveFrom} &middot; by {s.updatedBy ?? "—"}
+                                  {s.reason && ` · ${s.reason}`}
+                                </p>
+                              </div>
+                            </div>
+                          );
+                        })}
+                    </div>
+                  </div>
                 )}
               </CardContent>
             )}
@@ -520,25 +659,88 @@ function EmployeeProfileClient({ id }: { id: string }) {
               <ExperienceTab employee={employee} canEdit={canEditPersonalDetail} updateEmployee={updateEmployee} />
             )}
 
-            {active === "performance" && (
-              <CardContent>
-                {review ? (
-                  <div className="flex items-center justify-between rounded-xl border border-slate-100 p-4 dark:border-slate-800">
-                    <div>
-                      <p className="text-sm font-medium text-slate-700 dark:text-slate-200">{review.period}</p>
-                      <p className="text-xs text-slate-400 dark:text-slate-500">Performance review cycle</p>
-                    </div>
-                    <div className="text-right">
-                      {review.rating && (
-                        <p className="text-lg font-bold text-slate-800 dark:text-slate-100">{review.rating}/5</p>
-                      )}
-                      <StatusBadge status={review.status} />
+            {active === "performance" && canViewEmployeePerformance && (
+              <CardContent className="space-y-5">
+                <div>
+                  <h3 className="mb-2 text-sm font-semibold text-slate-800 dark:text-slate-100">Review Cycles</h3>
+                  <div className="space-y-2">
+                    {employeePerformanceCases.map(({ case: c, cycle }) => (
+                      <Link
+                        key={c.id}
+                        href={`/performance/${cycle!.id}`}
+                        className="flex items-center justify-between rounded-xl border border-slate-100 p-4 hover:border-indigo-200 dark:border-slate-800 dark:hover:border-indigo-900"
+                      >
+                        <div>
+                          <p className="text-sm font-medium text-slate-700 dark:text-slate-200">{cycle!.name}</p>
+                          <p className="text-xs text-slate-400 dark:text-slate-500">
+                            {performanceGoalsFor(employee.employeeId, cycle!.id).length} goal(s)
+                          </p>
+                        </div>
+                        <div className="text-right">
+                          {c.finalScore !== undefined && (
+                            <p className="text-lg font-bold text-slate-800 dark:text-slate-100">{c.finalScore}/5</p>
+                          )}
+                          <StatusBadge status={c.stage} />
+                        </div>
+                      </Link>
+                    ))}
+                    {employeePerformanceCases.length === 0 && (
+                      <p className="text-sm text-slate-400 dark:text-slate-500">No goals assigned.</p>
+                    )}
+                  </div>
+                </div>
+
+                {employeeAppraisals.length > 0 && (
+                  <div>
+                    <h3 className="mb-2 text-sm font-semibold text-slate-800 dark:text-slate-100">Appraisal History</h3>
+                    <div className="space-y-2">
+                      {employeeAppraisals.map((a) => (
+                        <div key={a.id} className="rounded-xl border border-slate-100 p-4 dark:border-slate-800">
+                          <div className="flex items-center justify-between">
+                            <p className="text-sm font-medium text-slate-700 dark:text-slate-200">Rating {a.finalRating}/5</p>
+                            <StatusBadge status={a.status} />
+                          </div>
+                          <p className="mt-1 text-xs text-slate-400 dark:text-slate-500">
+                            {a.previousCtcAnnual !== undefined && a.proposedCtcAnnual !== undefined
+                              ? `₹${a.previousCtcAnnual.toLocaleString("en-IN")} → ₹${a.proposedCtcAnnual.toLocaleString("en-IN")} (+${a.incrementPercent}%)`
+                              : `${a.incrementPercent}% increment`}
+                            {a.promotion && " · Promotion recommended"} · Effective {a.effectiveDate}
+                          </p>
+                        </div>
+                      ))}
                     </div>
                   </div>
-                ) : (
-                  <p className="text-sm text-slate-400 dark:text-slate-500">No performance reviews yet.</p>
                 )}
               </CardContent>
+            )}
+
+            {active === "training" && canViewEmployeeTraining && (
+              <TrainingTab
+                employee={employee}
+                canAssess={canAssessSkillFor(employee.employeeId)}
+                currentSkillsFor={currentSkillsFor}
+                skillHistoryFor={skillHistoryFor}
+                assessSkill={assessSkill}
+                proposalsFor={proposalsFor}
+                decideSkillUpdateProposal={decideSkillUpdateProposal}
+                enrollmentsForEmployee={enrollmentsForEmployee}
+                trainingRequestsFor={trainingRequestsFor}
+                trainingProgramById={trainingProgramById}
+              />
+            )}
+
+            {active === "assets" && canViewEmployeeAssets && (
+              <AssetsTab
+                employee={employee}
+                sites={sites}
+                assetById={assetById}
+                activeAssignmentsForEmployee={activeAssignmentsForEmployee}
+                assignmentsForEmployee={assetAssignmentsForEmployee}
+              />
+            )}
+
+            {active === "expenses" && canViewEmployeeExpenses && (
+              <ExpensesTab claims={expenseClaimsFor(employee.employeeId)} travelRequests={travelRequestsFor(employee.employeeId)} />
             )}
 
             {active === "timeline" && (
@@ -690,80 +892,911 @@ function EmployeeProfileClient({ id }: { id: string }) {
           </p>
         </CardContent>
       </Card>
+
+      {lifecycleModal === "confirm" && (
+        <ConfirmEmployeeModal employee={employee} onClose={() => setLifecycleModal(null)} confirmEmployee={confirmEmployee} />
+      )}
+      {lifecycleModal === "transfer" && (
+        <TransferEmployeeModal
+          employee={employee}
+          onClose={() => setLifecycleModal(null)}
+          transferEmployee={transferEmployee}
+          canTransferCrossSite={canTransferCrossSite}
+        />
+      )}
+      {lifecycleModal === "promote" && <PromoteEmployeeModal employee={employee} onClose={() => setLifecycleModal(null)} promoteEmployee={promoteEmployee} />}
+      {lifecycleModal === "manager" && <ChangeManagerModal employee={employee} onClose={() => setLifecycleModal(null)} changeManager={changeManager} />}
+      {lifecycleModal === "shift" && <ChangeShiftModal employee={employee} onClose={() => setLifecycleModal(null)} changeShift={changeShift} />}
+      {lifecycleModal === "revise-salary" && (
+        <ReviseSalaryModal
+          employee={employee}
+          currentSalary={salary}
+          onClose={() => setLifecycleModal(null)}
+          defaultSalaryLinesFor={defaultSalaryLinesFor}
+          saveSalaryStructure={saveSalaryStructure}
+        />
+      )}
     </div>
   );
 }
 
-function ChangePasswordForm() {
-  const [current, setCurrent] = useState("");
-  const [next, setNext] = useState("");
-  const [confirm, setConfirm] = useState("");
-  const [message, setMessage] = useState<{ tone: "success" | "error"; text: string } | null>(null);
+function todayStr() {
+  return new Date().toISOString().slice(0, 10);
+}
 
-  function handleSubmit(e: FormEvent) {
+function ConfirmEmployeeModal({
+  employee,
+  onClose,
+  confirmEmployee,
+}: {
+  employee: Employee;
+  onClose: () => void;
+  confirmEmployee: (employeeId: string, input: { confirmationDate: string; comment?: string }) => ActionResult;
+}) {
+  const toast = useToast();
+  function handleSubmit(e: FormEvent<HTMLFormElement>) {
     e.preventDefault();
-    setMessage(null);
-    if (next.length < 8 || !/[a-zA-Z]/.test(next) || !/[0-9]/.test(next) || !/[^a-zA-Z0-9]/.test(next)) {
-      setMessage({ tone: "error", text: "New password must be 8+ characters with a letter, number and symbol." });
-      return;
-    }
-    if (next !== confirm) {
-      setMessage({ tone: "error", text: "New password and confirmation don't match." });
-      return;
-    }
-    const result = changePassword(current, next);
-    if (!result.ok) {
-      setMessage({
-        tone: "error",
-        text:
-          result.error === "invalid_current_password"
-            ? "Current password is incorrect."
-            : result.error === "same_as_current"
-              ? "New password must be different from your current password."
-              : "Unable to change password right now.",
-      });
-      return;
-    }
-    setCurrent("");
-    setNext("");
-    setConfirm("");
-    setMessage({ tone: "success", text: "Password changed successfully." });
+    const form = new FormData(e.currentTarget);
+    const result = confirmEmployee(employee.id, {
+      confirmationDate: String(form.get("confirmationDate") ?? todayStr()),
+      comment: String(form.get("comment") ?? "").trim() || undefined,
+    });
+    (result.ok ? toast.success : toast.error)(result.message);
+    if (result.ok) onClose();
+  }
+  return (
+    <Modal open onClose={onClose} title={`Confirm ${employee.name}`}>
+      <form className="space-y-4" onSubmit={handleSubmit}>
+        <Field label="Confirmation Date">
+          <Input name="confirmationDate" type="date" required defaultValue={todayStr()} />
+        </Field>
+        <Field label="Comment (optional)">
+          <Textarea name="comment" rows={2} />
+        </Field>
+        <div className="flex justify-end gap-2 pt-2">
+          <Button type="button" variant="outline" onClick={onClose}>
+            Cancel
+          </Button>
+          <Button type="submit">Confirm Employee</Button>
+        </div>
+      </form>
+    </Modal>
+  );
+}
+
+function TransferEmployeeModal({
+  employee,
+  onClose,
+  transferEmployee,
+  canTransferCrossSite,
+}: {
+  employee: Employee;
+  onClose: () => void;
+  transferEmployee: (employeeId: string, input: Record<string, unknown> & { effectiveDate: string }) => ActionResult;
+  canTransferCrossSite: boolean;
+}) {
+  const toast = useToast();
+  const { sites } = useSite();
+  const { orgUnits } = useOrg();
+  const { employees } = useEmployees();
+  const [targetSiteId, setTargetSiteId] = useState(employee.siteId);
+
+  const siteDepartments = orgUnits.filter((u) => u.type === "Department" && u.siteId === targetSiteId);
+  const siteSubDepartments = orgUnits.filter((u) => u.type === "SubDepartment" && u.siteId === targetSiteId);
+  const sitePlants = orgUnits.filter((u) => u.type === "Plant" && u.siteId === targetSiteId);
+  const siteLocations = orgUnits.filter((u) => u.type === "Location" && u.siteId === targetSiteId);
+  const siteManagers = employees.filter((e) => e.siteId === targetSiteId && e.employeeId !== employee.employeeId && e.status === "Active");
+
+  function handleSubmit(e: FormEvent<HTMLFormElement>) {
+    e.preventDefault();
+    const form = new FormData(e.currentTarget);
+    const optional = (key: string) => String(form.get(key) ?? "").trim() || undefined;
+    const result = transferEmployee(employee.id, {
+      siteId: targetSiteId !== employee.siteId ? targetSiteId : undefined,
+      departmentId: optional("departmentId"),
+      subDepartmentId: optional("subDepartmentId"),
+      plantId: optional("plantId"),
+      locationId: optional("locationId"),
+      reportingManagerId: optional("reportingManagerId"),
+      effectiveDate: String(form.get("effectiveDate") ?? todayStr()),
+      comment: optional("comment"),
+    });
+    (result.ok ? toast.success : toast.error)(result.message);
+    if (result.ok) onClose();
   }
 
   return (
-    <div>
-      <h3 className="mb-3 flex items-center gap-2 text-sm font-semibold text-slate-800 dark:text-slate-100">
-        <Lock className="h-4 w-4" /> Change Password
-      </h3>
-      {message && (
-        <div
-          className={`mb-3 flex items-center gap-2 rounded-lg px-3.5 py-2.5 text-sm ${
-            message.tone === "success"
-              ? "bg-emerald-50 text-emerald-700 dark:bg-emerald-500/10 dark:text-emerald-400"
-              : "bg-rose-50 text-rose-700 dark:bg-rose-500/10 dark:text-rose-400"
-          }`}
-        >
-          {message.tone === "success" ? <Check className="h-4 w-4 shrink-0" /> : <AlertTriangle className="h-4 w-4 shrink-0" />}
-          {message.text}
+    <Modal open onClose={onClose} title={`Transfer ${employee.name}`}>
+      <form className="space-y-4" onSubmit={handleSubmit}>
+        <Field label="Site">
+          <Select value={targetSiteId} onChange={(e) => setTargetSiteId(e.target.value)} disabled={!canTransferCrossSite}>
+            {sites.map((s) => (
+              <option key={s.id} value={s.id}>
+                {s.name}
+              </option>
+            ))}
+          </Select>
+          {!canTransferCrossSite && <p className="mt-1 text-xs text-slate-400 dark:text-slate-500">Only a Super Admin can move an employee to a different site.</p>}
+        </Field>
+        <div className="grid grid-cols-2 gap-4">
+          <Field label="Department">
+            <Select name="departmentId" defaultValue="">
+              <option value="">— No change —</option>
+              {siteDepartments.map((d) => (
+                <option key={d.id} value={d.id}>
+                  {d.name}
+                </option>
+              ))}
+            </Select>
+          </Field>
+          <Field label="Sub Department">
+            <Select name="subDepartmentId" defaultValue="">
+              <option value="">— No change —</option>
+              {siteSubDepartments.map((d) => (
+                <option key={d.id} value={d.id}>
+                  {d.name}
+                </option>
+              ))}
+            </Select>
+          </Field>
         </div>
-      )}
-      <form onSubmit={handleSubmit} className="grid grid-cols-1 gap-4 sm:grid-cols-3">
-        <Field label="Current Password">
-          <Input type="password" value={current} onChange={(e) => setCurrent(e.target.value)} required />
+        <div className="grid grid-cols-2 gap-4">
+          <Field label="Plant">
+            <Select name="plantId" defaultValue="">
+              <option value="">— No change —</option>
+              {sitePlants.map((p) => (
+                <option key={p.id} value={p.id}>
+                  {p.name}
+                </option>
+              ))}
+            </Select>
+          </Field>
+          <Field label="Location">
+            <Select name="locationId" defaultValue="">
+              <option value="">— No change —</option>
+              {siteLocations.map((l) => (
+                <option key={l.id} value={l.id}>
+                  {l.name}
+                </option>
+              ))}
+            </Select>
+          </Field>
+        </div>
+        <Field label="Reporting Manager">
+          <Select name="reportingManagerId" defaultValue="">
+            <option value="">— No change —</option>
+            {siteManagers.map((m) => (
+              <option key={m.employeeId} value={m.employeeId}>
+                {m.name} ({m.employeeId})
+              </option>
+            ))}
+          </Select>
         </Field>
-        <Field label="New Password">
-          <Input type="password" value={next} onChange={(e) => setNext(e.target.value)} required />
+        <Field label="Effective Date">
+          <Input name="effectiveDate" type="date" required defaultValue={todayStr()} />
         </Field>
-        <Field label="Confirm New Password">
-          <Input type="password" value={confirm} onChange={(e) => setConfirm(e.target.value)} required />
+        <Field label="Comment (optional)">
+          <Textarea name="comment" rows={2} />
         </Field>
-        <div className="sm:col-span-3">
-          <Button type="submit" size="sm">
-            Update Password
+        <div className="flex justify-end gap-2 pt-2">
+          <Button type="button" variant="outline" onClick={onClose}>
+            Cancel
+          </Button>
+          <Button type="submit">Transfer</Button>
+        </div>
+      </form>
+    </Modal>
+  );
+}
+
+function PromoteEmployeeModal({
+  employee,
+  onClose,
+  promoteEmployee,
+}: {
+  employee: Employee;
+  onClose: () => void;
+  promoteEmployee: (employeeId: string, input: Record<string, unknown> & { effectiveDate: string }) => ActionResult;
+}) {
+  const toast = useToast();
+  const { recordsOfType } = useMasters();
+  const designations = recordsOfType("Designation").filter((d) => !d.siteId || d.siteId === employee.siteId);
+  const grades = recordsOfType("JobGrade").filter((g) => !g.siteId || g.siteId === employee.siteId);
+
+  function handleSubmit(e: FormEvent<HTMLFormElement>) {
+    e.preventDefault();
+    const form = new FormData(e.currentTarget);
+    const result = promoteEmployee(employee.id, {
+      designationId: String(form.get("designationId") ?? "") || undefined,
+      gradeId: String(form.get("gradeId") ?? "") || undefined,
+      effectiveDate: String(form.get("effectiveDate") ?? todayStr()),
+      comment: String(form.get("comment") ?? "").trim() || undefined,
+    });
+    (result.ok ? toast.success : toast.error)(result.message);
+    if (result.ok) onClose();
+  }
+
+  return (
+    <Modal open onClose={onClose} title={`Promote ${employee.name}`}>
+      <form className="space-y-4" onSubmit={handleSubmit}>
+        <p className="text-xs text-slate-400 dark:text-slate-500">Currently {employee.designation}.</p>
+        <div className="grid grid-cols-2 gap-4">
+          <Field label="New Designation">
+            <Select name="designationId" defaultValue="">
+              <option value="">— No change —</option>
+              {designations.map((d) => (
+                <option key={d.id} value={d.id}>
+                  {d.name}
+                </option>
+              ))}
+            </Select>
+          </Field>
+          <Field label="New Grade">
+            <Select name="gradeId" defaultValue="">
+              <option value="">— No change —</option>
+              {grades.map((g) => (
+                <option key={g.id} value={g.id}>
+                  {g.name}
+                </option>
+              ))}
+            </Select>
+          </Field>
+        </div>
+        <Field label="Effective Date">
+          <Input name="effectiveDate" type="date" required defaultValue={todayStr()} />
+        </Field>
+        <Field label="Comment (optional)">
+          <Textarea name="comment" rows={2} placeholder="e.g. Annual promotion cycle" />
+        </Field>
+        <div className="flex justify-end gap-2 pt-2">
+          <Button type="button" variant="outline" onClick={onClose}>
+            Cancel
+          </Button>
+          <Button type="submit">Promote</Button>
+        </div>
+      </form>
+    </Modal>
+  );
+}
+
+function ChangeManagerModal({
+  employee,
+  onClose,
+  changeManager,
+}: {
+  employee: Employee;
+  onClose: () => void;
+  changeManager: (employeeId: string, newManagerEmployeeId: string, comment?: string) => ActionResult;
+}) {
+  const toast = useToast();
+  const { employees } = useEmployees();
+  const candidates = employees.filter((e) => e.siteId === employee.siteId && e.employeeId !== employee.employeeId && e.status === "Active");
+
+  function handleSubmit(e: FormEvent<HTMLFormElement>) {
+    e.preventDefault();
+    const form = new FormData(e.currentTarget);
+    const result = changeManager(employee.id, String(form.get("managerId") ?? ""), String(form.get("comment") ?? "").trim() || undefined);
+    (result.ok ? toast.success : toast.error)(result.message);
+    if (result.ok) onClose();
+  }
+
+  return (
+    <Modal open onClose={onClose} title={`Change Manager — ${employee.name}`}>
+      <form className="space-y-4" onSubmit={handleSubmit}>
+        <Field label="New Reporting Manager">
+          <Select name="managerId" required defaultValue="">
+            <option value="" disabled>
+              Select manager
+            </option>
+            {candidates.map((m) => (
+              <option key={m.employeeId} value={m.employeeId}>
+                {m.name} ({m.employeeId})
+              </option>
+            ))}
+          </Select>
+        </Field>
+        <Field label="Comment (optional)">
+          <Textarea name="comment" rows={2} />
+        </Field>
+        <div className="flex justify-end gap-2 pt-2">
+          <Button type="button" variant="outline" onClick={onClose}>
+            Cancel
+          </Button>
+          <Button type="submit">Change Manager</Button>
+        </div>
+      </form>
+    </Modal>
+  );
+}
+
+function ChangeShiftModal({
+  employee,
+  onClose,
+  changeShift,
+}: {
+  employee: Employee;
+  onClose: () => void;
+  changeShift: (employeeId: string, newShiftId: string, effectiveDate: string, comment?: string) => ActionResult;
+}) {
+  const toast = useToast();
+  const { recordsOfType } = useMasters();
+  const shifts = recordsOfType("Shift").filter((s) => !s.siteId || s.siteId === employee.siteId);
+
+  function handleSubmit(e: FormEvent<HTMLFormElement>) {
+    e.preventDefault();
+    const form = new FormData(e.currentTarget);
+    const result = changeShift(
+      employee.id,
+      String(form.get("shiftId") ?? ""),
+      String(form.get("effectiveDate") ?? todayStr()),
+      String(form.get("comment") ?? "").trim() || undefined,
+    );
+    (result.ok ? toast.success : toast.error)(result.message);
+    if (result.ok) onClose();
+  }
+
+  return (
+    <Modal open onClose={onClose} title={`Change Shift — ${employee.name}`}>
+      <form className="space-y-4" onSubmit={handleSubmit}>
+        <Field label="New Shift">
+          <Select name="shiftId" required defaultValue="">
+            <option value="" disabled>
+              Select shift
+            </option>
+            {shifts.map((s) => (
+              <option key={s.id} value={s.id}>
+                {s.name}
+              </option>
+            ))}
+          </Select>
+        </Field>
+        <Field label="Effective Date">
+          <Input name="effectiveDate" type="date" required defaultValue={todayStr()} />
+        </Field>
+        <p className="text-xs text-slate-400 dark:text-slate-500">Only future attendance uses the new shift — already-recorded attendance keeps the shift it was marked under.</p>
+        <Field label="Comment (optional)">
+          <Textarea name="comment" rows={2} />
+        </Field>
+        <div className="flex justify-end gap-2 pt-2">
+          <Button type="button" variant="outline" onClick={onClose}>
+            Cancel
+          </Button>
+          <Button type="submit">Change Shift</Button>
+        </div>
+      </form>
+    </Modal>
+  );
+}
+
+function ReviseSalaryModal({
+  employee,
+  currentSalary,
+  onClose,
+  defaultSalaryLinesFor,
+  saveSalaryStructure,
+}: {
+  employee: Employee;
+  currentSalary?: EmployeeSalaryStructure;
+  onClose: () => void;
+  defaultSalaryLinesFor: (siteId: string, ctcAnnual: number) => { earnings: SalaryLine[]; deductions: SalaryLine[]; grossMonthly: number };
+  saveSalaryStructure: (input: {
+    employeeId: string;
+    siteId: string;
+    ctcAnnual: number;
+    earnings: SalaryLine[];
+    deductions: SalaryLine[];
+    effectiveFrom?: string;
+    reason?: string;
+  }) => ActionResult;
+}) {
+  const toast = useToast();
+  const { currentUser } = useAccessControl();
+  const [ctcDraft, setCtcDraft] = useState(currentSalary?.ctcAnnual ?? 0);
+  const [earningsDraft, setEarningsDraft] = useState<SalaryLine[]>(currentSalary?.earnings ?? []);
+  const [deductionsDraft, setDeductionsDraft] = useState<SalaryLine[]>(currentSalary?.deductions ?? []);
+
+  function regenerateFromCtc(ctc: number) {
+    if (ctc <= 0) return;
+    const { earnings, deductions } = defaultSalaryLinesFor(employee.siteId, ctc);
+    setEarningsDraft(earnings);
+    setDeductionsDraft(deductions);
+  }
+
+  function handleSubmit(e: FormEvent<HTMLFormElement>) {
+    e.preventDefault();
+    const form = new FormData(e.currentTarget);
+    const result = saveSalaryStructure({
+      employeeId: employee.employeeId,
+      siteId: employee.siteId,
+      ctcAnnual: ctcDraft,
+      earnings: earningsDraft,
+      deductions: deductionsDraft,
+      effectiveFrom: String(form.get("effectiveFrom") ?? todayStr()),
+      reason: String(form.get("reason") ?? "").trim() || undefined,
+    });
+    if (result.ok) {
+      logLifecycleEvent({
+        employeeId: employee.employeeId,
+        siteId: employee.siteId,
+        eventType: "Salary Revised",
+        previousValue: currentSalary ? `₹${currentSalary.ctcAnnual.toLocaleString("en-IN")}` : undefined,
+        newValue: `₹${ctcDraft.toLocaleString("en-IN")}`,
+        actorName: currentUser.name,
+        date: String(form.get("effectiveFrom") ?? todayStr()),
+        comment: String(form.get("reason") ?? "").trim() || undefined,
+      });
+    }
+    (result.ok ? toast.success : toast.error)(result.message);
+    if (result.ok) onClose();
+  }
+
+  return (
+    <Modal open onClose={onClose} title={`Revise Salary — ${employee.name}`}>
+      <form className="space-y-4" onSubmit={handleSubmit}>
+        {currentSalary && (
+          <p className="text-xs text-slate-400 dark:text-slate-500">
+            Current: ₹{currentSalary.ctcAnnual.toLocaleString("en-IN")} (effective {currentSalary.effectiveFrom}). Saving here creates a new version — August
+            payroll already processed keeps using whatever was effective then.
+          </p>
+        )}
+        <Field label="New Annual CTC (₹)">
+          <Input
+            type="number"
+            min={0}
+            step={1000}
+            value={ctcDraft || ""}
+            onChange={(e) => setCtcDraft(Number(e.target.value))}
+            onBlur={() => regenerateFromCtc(ctcDraft)}
+          />
+        </Field>
+        <div className="grid grid-cols-2 gap-4">
+          <Field label="Effective From">
+            <Input name="effectiveFrom" type="date" required defaultValue={todayStr()} />
+          </Field>
+          <Field label="Reason (optional)">
+            <Input name="reason" placeholder="e.g. Annual increment" />
+          </Field>
+        </div>
+        {earningsDraft.length > 0 && (
+          <div className="grid grid-cols-1 gap-4 sm:grid-cols-2">
+            <div>
+              <p className="mb-2 text-xs font-semibold uppercase tracking-wide text-slate-400 dark:text-slate-500">Earnings (monthly)</p>
+              <div className="space-y-2">
+                {earningsDraft.map((line, i) => (
+                  <div key={line.componentId} className="flex items-center gap-2">
+                    <span className="flex-1 text-sm text-slate-600 dark:text-slate-300">{line.label}</span>
+                    <Input
+                      type="number"
+                      min={0}
+                      value={line.amount}
+                      onChange={(e) => setEarningsDraft((prev) => prev.map((l, idx) => (idx === i ? { ...l, amount: Number(e.target.value) } : l)))}
+                      className="w-28"
+                    />
+                  </div>
+                ))}
+              </div>
+            </div>
+            <div>
+              <p className="mb-2 text-xs font-semibold uppercase tracking-wide text-slate-400 dark:text-slate-500">Deductions (monthly)</p>
+              <div className="space-y-2">
+                {deductionsDraft.map((line, i) => (
+                  <div key={line.componentId} className="flex items-center gap-2">
+                    <span className="flex-1 text-sm text-slate-600 dark:text-slate-300">{line.label}</span>
+                    <Input
+                      type="number"
+                      min={0}
+                      value={line.amount}
+                      onChange={(e) => setDeductionsDraft((prev) => prev.map((l, idx) => (idx === i ? { ...l, amount: Number(e.target.value) } : l)))}
+                      className="w-28"
+                    />
+                  </div>
+                ))}
+              </div>
+            </div>
+          </div>
+        )}
+        <div className="flex justify-end gap-2 pt-2">
+          <Button type="button" variant="outline" onClick={onClose}>
+            Cancel
+          </Button>
+          <Button type="submit" disabled={earningsDraft.length === 0}>
+            Save Revision
           </Button>
         </div>
       </form>
-    </div>
+    </Modal>
+  );
+}
+
+function TrainingTab({
+  employee,
+  canAssess,
+  currentSkillsFor,
+  skillHistoryFor,
+  assessSkill,
+  proposalsFor,
+  decideSkillUpdateProposal,
+  enrollmentsForEmployee,
+  trainingRequestsFor,
+  trainingProgramById,
+}: {
+  employee: Employee;
+  canAssess: boolean;
+  currentSkillsFor: ReturnType<typeof useSkills>["currentSkillsFor"];
+  skillHistoryFor: ReturnType<typeof useSkills>["skillHistoryFor"];
+  assessSkill: ReturnType<typeof useSkills>["assessSkill"];
+  proposalsFor: ReturnType<typeof useSkills>["proposalsFor"];
+  decideSkillUpdateProposal: ReturnType<typeof useSkills>["decideSkillUpdateProposal"];
+  enrollmentsForEmployee: ReturnType<typeof useTraining>["enrollmentsForEmployee"];
+  trainingRequestsFor: ReturnType<typeof useTraining>["requestsFor"];
+  trainingProgramById: ReturnType<typeof useTraining>["programById"];
+}) {
+  const { recordsOfType } = useMasters();
+  const toast = useToast();
+  const [assessOpen, setAssessOpen] = useState(false);
+  const [historyFor, setHistoryFor] = useState<string | null>(null);
+
+  const currentSkills = currentSkillsFor(employee.employeeId);
+  const enrollments = enrollmentsForEmployee(employee.employeeId);
+  const requests = trainingRequestsFor(employee.employeeId);
+  const pendingProposals = proposalsFor(employee.employeeId).filter((p) => p.status === "Pending");
+  const skillName = (id: string) => recordsOfType("Skill").find((s) => s.id === id)?.name ?? id;
+  const levelName = (id: string) => recordsOfType("SkillLevel").find((l) => l.id === id)?.name ?? id;
+
+  function handleDecideProposal(id: string, decision: "Approved" | "Rejected") {
+    const result = decideSkillUpdateProposal(id, decision);
+    (result.ok ? toast.success : toast.error)(result.message);
+  }
+
+  return (
+    <CardContent className="space-y-6">
+      {canAssess && pendingProposals.length > 0 && (
+        <div>
+          <h3 className="mb-2 text-sm font-semibold text-slate-800 dark:text-slate-100">Pending Skill Updates (from Training)</h3>
+          <div className="space-y-2">
+            {pendingProposals.map((p) => (
+              <div key={p.id} className="flex items-center justify-between rounded-xl border border-amber-200 bg-amber-50 p-3 text-sm dark:border-amber-900 dark:bg-amber-500/10">
+                <div>
+                  <p className="font-medium text-slate-700 dark:text-slate-200">
+                    {skillName(p.skillId)}: {p.currentSkillLevelId ? levelName(p.currentSkillLevelId) : "Not assessed"} → {levelName(p.proposedSkillLevelId)}
+                  </p>
+                  <p className="text-xs text-slate-500 dark:text-slate-400">{p.reason}</p>
+                </div>
+                <div className="flex gap-2">
+                  <Button size="sm" onClick={() => handleDecideProposal(p.id, "Approved")}>
+                    Confirm
+                  </Button>
+                  <Button size="sm" variant="outline" onClick={() => handleDecideProposal(p.id, "Rejected")}>
+                    Reject
+                  </Button>
+                </div>
+              </div>
+            ))}
+          </div>
+        </div>
+      )}
+
+      <div>
+        <div className="mb-2 flex items-center justify-between">
+          <h3 className="text-sm font-semibold text-slate-800 dark:text-slate-100">Current Skills</h3>
+          {canAssess && (
+            <Button size="sm" variant="outline" onClick={() => setAssessOpen(true)}>
+              Assess Skill
+            </Button>
+          )}
+        </div>
+        {currentSkills.length === 0 ? (
+          <p className="text-sm text-slate-400 dark:text-slate-500">No structured skill records yet.</p>
+        ) : (
+          <div className="space-y-2">
+            {currentSkills.map((s) => (
+              <div key={s.skillId} className="flex items-center justify-between rounded-lg border border-slate-100 p-3 text-sm dark:border-slate-800">
+                <div>
+                  <p className="font-medium text-slate-700 dark:text-slate-200">{skillName(s.skillId)}</p>
+                  <p className="text-xs text-slate-400 dark:text-slate-500">
+                    {levelName(s.skillLevelId)} · {s.source} · Assessed {s.lastAssessedDate}
+                    {s.yearsOfExperience !== undefined && ` · ${s.yearsOfExperience} yr(s) experience`}
+                  </p>
+                </div>
+                <button
+                  className="text-xs font-medium text-indigo-600 hover:underline dark:text-indigo-400"
+                  onClick={() => setHistoryFor(historyFor === s.skillId ? null : s.skillId)}
+                >
+                  {historyFor === s.skillId ? "Hide History" : "History"}
+                </button>
+              </div>
+            ))}
+          </div>
+        )}
+        {historyFor && (
+          <div className="mt-2 space-y-1 rounded-lg bg-slate-50 p-3 text-xs dark:bg-slate-800/60">
+            {skillHistoryFor(employee.employeeId, historyFor)
+              .slice()
+              .reverse()
+              .map((h) => (
+                <p key={h.id} className="text-slate-500 dark:text-slate-400">
+                  {h.lastAssessedDate} — {levelName(h.skillLevelId)} ({h.source}, by {h.assessedBy}){h.comment ? ` — ${h.comment}` : ""}
+                </p>
+              ))}
+          </div>
+        )}
+      </div>
+
+      <div>
+        <h3 className="mb-2 text-sm font-semibold text-slate-800 dark:text-slate-100">Current &amp; Completed Training</h3>
+        <div className="space-y-2">
+          {enrollments.map((e) => {
+            const program = trainingProgramById(e.trainingProgramId);
+            return (
+              <div key={e.id} className="flex items-center justify-between rounded-lg border border-slate-100 p-3 text-sm dark:border-slate-800">
+                <div>
+                  <p className="font-medium text-slate-700 dark:text-slate-200">
+                    {program ? (
+                      <Link href={`/training/${program.id}`} className="hover:text-indigo-600 dark:hover:text-indigo-400">
+                        {program.name}
+                      </Link>
+                    ) : (
+                      "—"
+                    )}
+                  </p>
+                  {e.completionDate && <p className="text-xs text-slate-400 dark:text-slate-500">Completed {e.completionDate}{e.score !== undefined ? ` · Score ${e.score}` : ""}</p>}
+                </div>
+                <StatusBadge status={e.status} />
+              </div>
+            );
+          })}
+          {enrollments.length === 0 && <p className="text-sm text-slate-400 dark:text-slate-500">No training assigned.</p>}
+        </div>
+      </div>
+
+      {requests.length > 0 && (
+        <div>
+          <h3 className="mb-2 text-sm font-semibold text-slate-800 dark:text-slate-100">Pending Training Requests</h3>
+          <div className="space-y-2">
+            {requests
+              .filter((r) => r.status === "Pending")
+              .map((r) => {
+                const program = trainingProgramById(r.trainingProgramId);
+                return (
+                  <div key={r.id} className="flex items-center justify-between rounded-lg border border-slate-100 p-3 text-sm dark:border-slate-800">
+                    <p className="text-slate-700 dark:text-slate-200">{program?.name ?? "—"}</p>
+                    <StatusBadge status={r.status} />
+                  </div>
+                );
+              })}
+            {requests.filter((r) => r.status === "Pending").length === 0 && <p className="text-sm text-slate-400 dark:text-slate-500">No pending requests.</p>}
+          </div>
+        </div>
+      )}
+
+      {assessOpen && <AssessSkillModal employee={employee} onClose={() => setAssessOpen(false)} assessSkill={assessSkill} />}
+    </CardContent>
+  );
+}
+
+function AssessSkillModal({
+  employee,
+  onClose,
+  assessSkill,
+}: {
+  employee: Employee;
+  onClose: () => void;
+  assessSkill: ReturnType<typeof useSkills>["assessSkill"];
+}) {
+  const toast = useToast();
+  const { recordsOfType } = useMasters();
+
+  function handleSubmit(e: FormEvent<HTMLFormElement>) {
+    e.preventDefault();
+    const form = new FormData(e.currentTarget);
+    const result = assessSkill({
+      employeeId: employee.employeeId,
+      siteId: employee.siteId,
+      skillId: String(form.get("skillId") ?? ""),
+      skillLevelId: String(form.get("skillLevelId") ?? ""),
+      yearsOfExperience: form.get("yearsOfExperience") ? Number(form.get("yearsOfExperience")) : undefined,
+      comment: String(form.get("comment") ?? "") || undefined,
+    });
+    (result.ok ? toast.success : toast.error)(result.message);
+    if (result.ok) onClose();
+  }
+
+  return (
+    <Modal open onClose={onClose} title={`Assess Skill — ${employee.name}`}>
+      <form className="space-y-4" onSubmit={handleSubmit}>
+        <div className="grid grid-cols-2 gap-4">
+          <Field label="Skill">
+            <Select name="skillId" required defaultValue="">
+              <option value="" disabled>
+                Select skill
+              </option>
+              {recordsOfType("Skill").map((s) => (
+                <option key={s.id} value={s.id}>
+                  {s.name}
+                </option>
+              ))}
+            </Select>
+          </Field>
+          <Field label="Assessed Level">
+            <Select name="skillLevelId" required defaultValue="">
+              <option value="" disabled>
+                Select level
+              </option>
+              {recordsOfType("SkillLevel").map((l) => (
+                <option key={l.id} value={l.id}>
+                  {l.name}
+                </option>
+              ))}
+            </Select>
+          </Field>
+        </div>
+        <Field label="Years of Experience (optional)">
+          <Input name="yearsOfExperience" type="number" min={0} step={0.5} />
+        </Field>
+        <Field label="Comment (optional)">
+          <Textarea name="comment" rows={2} />
+        </Field>
+        <div className="flex justify-end gap-2 pt-2">
+          <Button type="button" variant="outline" onClick={onClose}>
+            Cancel
+          </Button>
+          <Button type="submit">Save Assessment</Button>
+        </div>
+      </form>
+    </Modal>
+  );
+}
+
+function AssetsTab({
+  employee,
+  sites,
+  assetById,
+  activeAssignmentsForEmployee,
+  assignmentsForEmployee,
+}: {
+  employee: Employee;
+  sites: ReturnType<typeof useSite>["sites"];
+  assetById: ReturnType<typeof useAssets>["assetById"];
+  activeAssignmentsForEmployee: ReturnType<typeof useAssets>["activeAssignmentsForEmployee"];
+  assignmentsForEmployee: ReturnType<typeof useAssets>["assignmentsForEmployee"];
+}) {
+  const { recordsOfType } = useMasters();
+  const active = activeAssignmentsForEmployee(employee.employeeId);
+  const history = assignmentsForEmployee(employee.employeeId).filter((a) => a.returnedDate);
+  const assetTypeName = (id: string) => recordsOfType("AssetType").find((t) => t.id === id)?.name ?? id;
+
+  return (
+    <CardContent className="space-y-6">
+      <div>
+        <h3 className="mb-2 text-sm font-semibold text-slate-800 dark:text-slate-100">Assigned Assets</h3>
+        {active.length === 0 ? (
+          <p className="text-sm text-slate-400 dark:text-slate-500">No assets assigned.</p>
+        ) : (
+          <div className="space-y-2">
+            {active.map((asn) => {
+              const asset = assetById(asn.assetId);
+              if (!asset) return null;
+              // Section 22: a site transfer never silently moves an asset — surface the mismatch so HR can decide.
+              const siteMismatch = asset.siteId !== employee.siteId;
+              return (
+                <div key={asn.id} className="rounded-xl border border-slate-100 p-4 dark:border-slate-800">
+                  <div className="flex items-center justify-between">
+                    <div>
+                      <Link href={`/assets/${asset.id}`} className="text-sm font-medium text-slate-700 hover:text-indigo-600 dark:text-slate-200 dark:hover:text-indigo-400">
+                        {asset.name}
+                      </Link>
+                      <p className="text-xs text-slate-400 dark:text-slate-500">
+                        {asset.assetCode} · {assetTypeName(asset.assetTypeId)} · {asset.serialNumber ?? "No serial"} · Assigned {asn.assignedDate}
+                      </p>
+                    </div>
+                    <div className="flex items-center gap-2">
+                      <StatusBadge status={asn.conditionAtAssignment} />
+                      <StatusBadge status={asset.status} />
+                    </div>
+                  </div>
+                  {siteMismatch && (
+                    <p className="mt-2 rounded-lg bg-amber-50 px-3 py-2 text-xs text-amber-700 dark:bg-amber-500/10 dark:text-amber-400">
+                      This asset belongs to {sites.find((s) => s.id === asset.siteId)?.name ?? "another site"} — {employee.name} is now at{" "}
+                      {sites.find((s) => s.id === employee.siteId)?.name ?? "a different site"}. Decide from the asset&apos;s page whether to keep, return, or
+                      transfer it.
+                    </p>
+                  )}
+                </div>
+              );
+            })}
+          </div>
+        )}
+      </div>
+
+      {history.length > 0 && (
+        <div>
+          <h3 className="mb-2 text-sm font-semibold text-slate-800 dark:text-slate-100">Past Assets</h3>
+          <div className="space-y-2">
+            {history.map((asn) => {
+              const asset = assetById(asn.assetId);
+              if (!asset) return null;
+              return (
+                <div key={asn.id} className="flex items-center justify-between rounded-xl border border-slate-100 p-3 text-sm dark:border-slate-800">
+                  <div>
+                    <Link href={`/assets/${asset.id}`} className="font-medium text-slate-700 hover:text-indigo-600 dark:text-slate-200 dark:hover:text-indigo-400">
+                      {asset.name}
+                    </Link>
+                    <p className="text-xs text-slate-400 dark:text-slate-500">
+                      {asn.assignedDate} → {asn.returnedDate}
+                      {asn.transferredToEmployeeId ? " (transferred)" : " (returned)"}
+                    </p>
+                  </div>
+                  <StatusBadge status={asn.conditionAtReturn ?? asn.conditionAtAssignment} />
+                </div>
+              );
+            })}
+          </div>
+        </div>
+      )}
+    </CardContent>
+  );
+}
+
+function ExpensesTab({
+  claims,
+  travelRequests,
+}: {
+  claims: ReturnType<ReturnType<typeof useExpense>["claimsFor"]>;
+  travelRequests: ReturnType<ReturnType<typeof useExpense>["requestsFor"]>;
+}) {
+  function currency(n: number) {
+    return `₹${n.toLocaleString("en-IN")}`;
+  }
+
+  return (
+    <CardContent className="space-y-6">
+      <div>
+        <h3 className="mb-2 text-sm font-semibold text-slate-800 dark:text-slate-100">Travel Requests</h3>
+        {travelRequests.length === 0 ? (
+          <p className="text-sm text-slate-400 dark:text-slate-500">No travel requests.</p>
+        ) : (
+          <div className="space-y-2">
+            {travelRequests.map((r) => (
+              <div key={r.id} className="flex items-center justify-between rounded-xl border border-slate-100 p-3 text-sm dark:border-slate-800">
+                <div>
+                  <Link href={`/expenses/travel/${r.id}`} className="font-medium text-slate-700 hover:text-indigo-600 dark:text-slate-200 dark:hover:text-indigo-400">
+                    {r.purpose}
+                  </Link>
+                  <p className="text-xs text-slate-400 dark:text-slate-500">
+                    {r.destination} · {r.fromDate} → {r.toDate} · {currency(r.estimatedCost)}
+                  </p>
+                </div>
+                <StatusBadge status={r.status} />
+              </div>
+            ))}
+          </div>
+        )}
+      </div>
+
+      <div>
+        <h3 className="mb-2 text-sm font-semibold text-slate-800 dark:text-slate-100">Expense Claims</h3>
+        {claims.length === 0 ? (
+          <p className="text-sm text-slate-400 dark:text-slate-500">No expense claims.</p>
+        ) : (
+          <div className="space-y-2">
+            {claims.map((c) => (
+              <div key={c.id} className="flex items-center justify-between rounded-xl border border-slate-100 p-3 text-sm dark:border-slate-800">
+                <div>
+                  <Link href={`/expenses/claims/${c.id}`} className="font-medium text-slate-700 hover:text-indigo-600 dark:text-slate-200 dark:hover:text-indigo-400">
+                    {c.title}
+                  </Link>
+                  <p className="text-xs text-slate-400 dark:text-slate-500">
+                    {c.items.length} item{c.items.length === 1 ? "" : "s"} · {currency(c.totalAmount)}
+                    {c.status === "Reimbursed" && c.reimbursedAmount !== undefined ? ` · Reimbursed ${currency(c.reimbursedAmount)}` : ""}
+                  </p>
+                </div>
+                <StatusBadge status={c.status} />
+              </div>
+            ))}
+          </div>
+        )}
+      </div>
+    </CardContent>
   );
 }
 

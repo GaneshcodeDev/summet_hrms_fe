@@ -12,6 +12,25 @@ import type { PayrollLeaveDay } from "@/lib/leave-engine";
 
 const dayNames = ["Sun", "Mon", "Tue", "Wed", "Thu", "Fri", "Sat"];
 
+/**
+ * Picks the salary structure version that actually applied during `month`
+ * (YYYY-MM) — the latest revision whose effectiveFrom is still on or before
+ * that month, never just "whichever record is current right now" (Phase 12
+ * section 10). `${month}-31` is a safe upper-bound sentinel for lexicographic
+ * ISO-date comparison: it's always >= every real date inside `month`, even
+ * for 28/29/30-day months, without needing real calendar math here.
+ */
+export function selectSalaryStructureForMonth(
+  structures: EmployeeSalaryStructure[],
+  employeeId: string,
+  month: string,
+): EmployeeSalaryStructure | undefined {
+  const monthEnd = `${month}-31`;
+  const candidates = structures.filter((s) => s.employeeId === employeeId && s.effectiveFrom <= monthEnd);
+  if (candidates.length === 0) return undefined;
+  return candidates.reduce((latest, s) => (s.effectiveFrom > latest.effectiveFrom ? s : latest));
+}
+
 /** All calendar dates in `month` (YYYY-MM) that fall on one of the site's configured working days, capped at `upTo` if given. */
 export function listWorkingDaysInMonth(month: string, workingDays: string[], upTo?: string): string[] {
   const [year, mo] = month.split("-").map(Number);

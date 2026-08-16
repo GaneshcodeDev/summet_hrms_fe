@@ -11,6 +11,10 @@ import {
 import { logOnboardingAudit, onboardingAuditStore, onboardingCasesStore } from "@/lib/onboarding-store";
 import { onboardingDocumentTemplates, onboardingTaskTemplates } from "@/lib/onboarding-data";
 import { useAccessControl } from "@/lib/access-control-context";
+import { useEmployees } from "@/lib/employee-context";
+import { usePayroll } from "@/lib/payroll-context";
+import { useSite } from "@/lib/site-context";
+import { applicationsStore, logRecruitmentAudit } from "@/lib/recruitment-store";
 import type {
   DocumentStatus,
   OnboardingAuditEntry,
@@ -18,6 +22,7 @@ import type {
   OnboardingDocument,
   OnboardingTask,
   OnboardingTaskStatus,
+  SalaryLine,
 } from "@/lib/types";
 
 interface ActionResult {
@@ -34,6 +39,26 @@ interface CreateCaseInput {
   siteId: string;
   buddyId?: string;
   joiningDate: string;
+  /**
+   * Set when this case originated from an accepted Recruitment Offer (see
+   * recruitment-context.tsx's acceptOffer) — carries everything
+   * completeOnboarding needs to create a real, fully-mapped Employee record
+   * without a second, parallel data entry step. All optional: a case HR
+   * creates by hand today (the "New Joiner" form) simply omits them, and
+   * Employee creation falls back to the plain designation/department text.
+   */
+  recruitmentApplicationId?: string;
+  departmentId?: string;
+  subDepartmentId?: string;
+  designationId?: string;
+  gradeId?: string;
+  employmentTypeId?: string;
+  employeeTypeId?: string;
+  reportingManagerId?: string;
+  probationPeriodMonths?: number;
+  offerCtcAnnual?: number;
+  offerEarnings?: SalaryLine[];
+  offerDeductions?: SalaryLine[];
 }
 
 interface OnboardingContextValue {
@@ -70,6 +95,9 @@ function mandatoryDocsCleared(c: OnboardingCase) {
 
 export function OnboardingProvider({ children }: { children: ReactNode }) {
   const { currentUser, canFeature } = useAccessControl();
+  const { createEmployee } = useEmployees();
+  const { saveSalaryStructure } = usePayroll();
+  const { sites } = useSite();
 
   const cases = useSyncExternalStore(
     onboardingCasesStore.subscribe,
@@ -139,6 +167,18 @@ export function OnboardingProvider({ children }: { children: ReactNode }) {
         joiningDate: input.joiningDate,
         status: "Pre-boarding",
         createdOn: now,
+        recruitmentApplicationId: input.recruitmentApplicationId,
+        departmentId: input.departmentId,
+        subDepartmentId: input.subDepartmentId,
+        designationId: input.designationId,
+        gradeId: input.gradeId,
+        employmentTypeId: input.employmentTypeId,
+        employeeTypeId: input.employeeTypeId,
+        reportingManagerId: input.reportingManagerId,
+        probationPeriodMonths: input.probationPeriodMonths,
+        offerCtcAnnual: input.offerCtcAnnual,
+        offerEarnings: input.offerEarnings,
+        offerDeductions: input.offerDeductions,
         tasks: onboardingTaskTemplates.map((t) => ({
           id: `${id}-${t.id}`,
           title: t.title,
@@ -325,17 +365,78 @@ export function OnboardingProvider({ children }: { children: ReactNode }) {
       if (!mandatoryTasksDone(record)) return { ok: false, message: "All mandatory checklist tasks must be completed first." };
       if (!mandatoryDocsCleared(record)) return { ok: false, message: "All mandatory documents must be verified (and signed, where required) first." };
 
-      mutateCase(caseId, (c) => ({ ...c, status: "Completed", completedOn: new Date().toISOString().slice(0, 10) }));
+      // This is the real Employee Store — completeOnboarding is the one place
+      // an onboarding case ever produces a headcount hire; there is no
+      // parallel/second Employee model anywhere in Onboarding or Recruitment.
+      // A case that already carries an employeeId (e.g. one HR hand-linked
+      // outside this flow) is left as-is rather than creating a duplicate.
+      let employeeId = record.employeeId;
+      let salaryWarning: string | undefined;
+      if (!employeeId) {
+        const created = createEmployee({
+          name: record.candidateName,
+          email: record.candidateEmail,
+          phone: record.candidatePhone,
+          department: record.department,
+          designation: record.designation,
+          location: sites.find((s) => s.id === record.siteId)?.name ?? "",
+          siteId: record.siteId,
+          dateOfJoining: record.joiningDate,
+          departmentId: record.departmentId,
+          subDepartmentId: record.subDepartmentId,
+          designationId: record.designationId,
+          gradeId: record.gradeId,
+          employmentTypeId: record.employmentTypeId,
+          employeeTypeId: record.employeeTypeId,
+          reportingManagerId: record.reportingManagerId,
+          employmentStage: "Probation",
+          probationPeriodMonths: record.probationPeriodMonths,
+        });
+        if (!created.ok || !created.employee) {
+          return { ok: false, message: `Could not create the employee record: ${created.message}` };
+        }
+        employeeId = created.employee.employeeId;
+
+        if (record.offerCtcAnnual && record.offerEarnings && record.offerDeductions) {
+          const salaryResult = saveSalaryStructure({
+            employeeId,
+            siteId: record.siteId,
+            ctcAnnual: record.offerCtcAnnual,
+            earnings: record.offerEarnings,
+            deductions: record.offerDeductions,
+            effectiveFrom: record.joiningDate,
+            reason: "New hire — offer salary",
+          });
+          if (!salaryResult.ok) salaryWarning = ` Salary structure could not be set automatically: ${salaryResult.message}`;
+        }
+
+        if (record.recruitmentApplicationId) {
+          const application = applicationsStore.getSnapshot().find((a) => a.id === record.recruitmentApplicationId);
+          if (application && application.stage !== "Hired" && application.stage !== "Rejected" && application.stage !== "Withdrawn") {
+            applicationsStore.set(applicationsStore.getSnapshot().map((a) => (a.id === application.id ? { ...a, stage: "Hired" } : a)));
+            logRecruitmentAudit({
+              recordType: "Application",
+              recordId: application.id,
+              siteId: application.siteId,
+              action: "stage_changed",
+              actorName: currentUser.name,
+              detail: `Offer Accepted -> Hired (Employee ${employeeId} created)`,
+            });
+          }
+        }
+      }
+
+      mutateCase(caseId, (c) => ({ ...c, status: "Completed", completedOn: new Date().toISOString().slice(0, 10), employeeId }));
       logOnboardingAudit({
         caseId,
         candidateName: record.candidateName,
         action: "completed",
         actorName: currentUser.name,
-        detail: "Onboarding completed — all mandatory tasks and documents cleared",
+        detail: `Onboarding completed — Employee ${employeeId} created`,
       });
-      return { ok: true, message: `Onboarding completed for ${record.candidateName}.` };
+      return { ok: true, message: `Onboarding completed for ${record.candidateName} — created as ${employeeId}.${salaryWarning ?? ""}` };
     },
-    [canManage, currentUser.name, mutateCase],
+    [canManage, createEmployee, saveSalaryStructure, sites, currentUser.name, mutateCase],
   );
 
   const cancelOnboarding = useCallback(

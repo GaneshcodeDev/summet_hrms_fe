@@ -16,18 +16,39 @@
 import { summarizeAttendance } from "@/lib/attendance-context";
 import { calculateLeaveDays, computeLeaveBalanceSummary, getLeaveSummary, type LeaveBalanceSummary } from "@/lib/leave-engine";
 import type {
+  AppraisalDecision,
+  Application,
   ApprovalInstance,
+  Asset,
+  AssetAssignment,
   AttendanceRecord,
+  Candidate,
   Employee,
+  EmployeeLifecycleEvent,
+  EmployeeSkill,
+  ExpenseClaim,
+  TravelRequest,
+  Interview,
+  JobOpening,
+  JobRequisition,
   LeaveBalance,
   LeaveRequest,
   MasterRecord,
+  Offer,
   OrgUnit,
   PayrollPayslip,
   PayrollRun,
+  PerformanceGoal,
+  PerformanceReviewCase,
   SeparationCase,
   Site,
+  TrainingEnrollment,
+  TrainingProgram,
 } from "@/lib/types";
+import { activeEnrollments } from "@/lib/training-engine";
+import { selectCurrentSkills } from "@/lib/skill-engine";
+import { getAssetInventorySummary } from "@/lib/asset-engine";
+import { getExpenseSummary, getTravelSummary } from "@/lib/expense-engine";
 
 const round = (n: number, digits = 0) => Math.round(n * 10 ** digits) / 10 ** digits;
 
@@ -72,6 +93,7 @@ export interface ReportEmployeeRow {
   employeeType: string;
   location: string;
   plant: string;
+  shift: string;
   dateOfJoining: string;
   reportingManagerId?: string;
 }
@@ -102,6 +124,7 @@ export function buildReportEmployeeRows(
       employeeType: (e.employeeTypeId && masterName.get(e.employeeTypeId)) || "Unassigned",
       location: e.location || "Unassigned",
       plant: (e.plantId && orgUnitName.get(e.plantId)) || "Unassigned",
+      shift: (e.shiftId && masterName.get(e.shiftId)) || "Unassigned",
       dateOfJoining: e.dateOfJoining,
       reportingManagerId: e.reportingManagerId,
     }));
@@ -253,6 +276,30 @@ export function getLateComingReport(records: AttendanceRecord[]): LateComingRepo
     totalLateMinutes,
     avgLateMinutes: lateRecords.length ? round(totalLateMinutes / lateRecords.length, 1) : 0,
   };
+}
+
+export interface LateComingBreakdownRow {
+  label: string;
+  report: LateComingReport;
+}
+
+/** Groups the exact same late-coming math (getLateComingReport) by any employee dimension — no second formula. */
+export function getLateComingBreakdown(
+  records: AttendanceRecord[],
+  rows: ReportEmployeeRow[],
+  dimension: (row: ReportEmployeeRow) => string,
+): LateComingBreakdownRow[] {
+  const rowByEmployeeId = new Map(rows.map((r) => [r.employeeId, r]));
+  const grouped = new Map<string, AttendanceRecord[]>();
+  for (const rec of records) {
+    const empRow = rowByEmployeeId.get(rec.employeeId);
+    const key = (empRow ? dimension(empRow) : undefined) || "Unassigned";
+    grouped.set(key, [...(grouped.get(key) ?? []), rec]);
+  }
+  return Array.from(grouped.entries())
+    .map(([label, recs]) => ({ label, report: getLateComingReport(recs) }))
+    .filter((r) => r.report.lateInstances > 0)
+    .sort((a, b) => b.report.lateInstances - a.report.lateInstances);
 }
 
 export interface OvertimeReport {
@@ -439,6 +486,24 @@ export function getLopReport(payslips: PayrollPayslip[]): LopReport {
   };
 }
 
+/** LOP by employee/department/site — reuses getPayrollBreakdown's own lop/employeeCount fields, only filters to rows that actually had LOP. */
+export function getLopBreakdown(payslips: PayrollPayslip[], rows: ReportEmployeeRow[], dimension: (row: ReportEmployeeRow) => string): PayrollBreakdownRow[] {
+  return getPayrollBreakdown(
+    payslips.filter((p) => p.lopDays > 0),
+    rows,
+    dimension,
+  ).filter((r) => r.lop > 0);
+}
+
+/** LOP amount trend by payroll month — only months with a processed payslip that actually carried LOP, never padded. */
+export function getLopMonthlyTrend(payslips: PayrollPayslip[]): MonthlyTrendPoint[] {
+  return getMonthlyTrend(
+    payslips.filter((p) => p.lopDays > 0),
+    (p) => p.month,
+    (slips) => round(slips.reduce((s, p) => s + lopAmountOf(p), 0)),
+  );
+}
+
 /* ------------------------------------------------------------------ */
 /* Approvals                                                            */
 /* ------------------------------------------------------------------ */
@@ -474,6 +539,19 @@ export function getApprovalReport(instances: ApprovalInstance[]): ApprovalReport
 
 export function getApprovalBreakdownByModule(instances: ApprovalInstance[]): CountRow[] {
   return countBy(instances, (i) => i.module);
+}
+
+export interface ApprovalSlaRow {
+  module: string;
+  report: ApprovalReport;
+}
+
+/** Same getApprovalReport timing math, split per module — no separate SLA formula. */
+export function getApprovalSlaByModule(instances: ApprovalInstance[]): ApprovalSlaRow[] {
+  const modules = Array.from(new Set(instances.map((i) => i.module)));
+  return modules
+    .map((module) => ({ module, report: getApprovalReport(instances.filter((i) => i.module === module)) }))
+    .sort((a, b) => a.module.localeCompare(b.module));
 }
 
 export function formatDuration(ms: number): string {
@@ -589,4 +667,498 @@ export function latestRunPerSite(runs: PayrollRun[]): Map<string, PayrollRun> {
     if (!current || run.month > current.month) latest.set(run.siteId, run);
   }
   return latest;
+}
+
+/* ------------------------------------------------------------------ */
+/* Recruitment — reads Application.stage as the single source of truth  */
+/* for pipeline state (never re-derives "hired"/"active" from anywhere  */
+/* else); Offer/Requisition figures are read directly off their own     */
+/* stored fields, exactly like Payroll figures above.                   */
+/* ------------------------------------------------------------------ */
+
+export interface RecruitmentFunnelReport {
+  openPositions: number;
+  activeCandidates: number;
+  offersPending: number;
+  offersAccepted: number;
+  positionsFilled: number;
+}
+
+export function getRecruitmentFunnelReport(openings: JobOpening[], applications: Application[], offers: Offer[]): RecruitmentFunnelReport {
+  const activeStages = new Set(["Applied", "Screening", "Interview", "Selected", "Offer", "Offer Accepted"]);
+  return {
+    openPositions: openings.filter((o) => o.status === "Open").reduce((s, o) => s + o.openings, 0),
+    activeCandidates: new Set(applications.filter((a) => activeStages.has(a.stage)).map((a) => a.candidateId)).size,
+    offersPending: offers.filter((o) => o.status === "Sent").length,
+    offersAccepted: offers.filter((o) => o.status === "Accepted").length,
+    positionsFilled: applications.filter((a) => a.stage === "Hired").length,
+  };
+}
+
+/** Interviews scheduled for a given date (YYYY-MM-DD) — no timezone math beyond string equality, same convention attendance/leave date filters already use. */
+export function getInterviewsOnDate(interviews: Interview[], date: string): Interview[] {
+  return interviews.filter((i) => i.scheduledDate === date && i.status === "Scheduled");
+}
+
+export interface RequisitionReport {
+  total: number;
+  pendingApproval: number;
+  approved: number;
+  rejected: number;
+  positionsRequested: number;
+  positionsApproved: number;
+}
+
+export function getRequisitionReport(requisitions: JobRequisition[]): RequisitionReport {
+  return {
+    total: requisitions.length,
+    pendingApproval: requisitions.filter((r) => r.status === "Pending Approval").length,
+    approved: requisitions.filter((r) => r.status === "Approved").length,
+    rejected: requisitions.filter((r) => r.status === "Rejected").length,
+    positionsRequested: requisitions.reduce((s, r) => s + r.positions, 0),
+    positionsApproved: requisitions.filter((r) => r.status === "Approved").reduce((s, r) => s + r.positions, 0),
+  };
+}
+
+/** Hired-application counts by department/site — resolved through the JobOpening each application belongs to, never a second department field on Application itself. */
+export function getHiringBreakdown(applications: Application[], openings: JobOpening[], dimension: (opening: JobOpening) => string | undefined): CountRow[] {
+  const openingById = new Map(openings.map((o) => [o.id, o]));
+  const hired = applications.filter((a) => a.stage === "Hired");
+  return countBy(hired, (a) => {
+    const opening = openingById.get(a.jobOpeningId);
+    return opening ? dimension(opening) : undefined;
+  });
+}
+
+/** Hired-application counts by candidate source (RecruitmentSource master) — resolved through Candidate.sourceId, never duplicated onto Application. */
+export function getSourceWiseHiring(applications: Application[], candidates: Candidate[]): CountRow[] {
+  const candidateById = new Map(candidates.map((c) => [c.id, c]));
+  const hired = applications.filter((a) => a.stage === "Hired");
+  return countBy(hired, (a) => candidateById.get(a.candidateId)?.sourceId);
+}
+
+export interface ConversionReport {
+  total: number;
+  advanced: number;
+  conversionPct: number;
+}
+
+/** Generic "how many of X moved past Y" — used for both interview-to-selected and offer-to-accepted conversion so the math is written once. */
+function getConversionReport<T>(items: T[], countedAs: (item: T) => boolean): ConversionReport {
+  const advanced = items.filter(countedAs).length;
+  return { total: items.length, advanced, conversionPct: items.length > 0 ? round((advanced / items.length) * 100, 1) : 0 };
+}
+
+export function getInterviewConversionReport(interviews: Interview[]): ConversionReport {
+  return getConversionReport(
+    interviews.filter((i) => i.status === "Completed"),
+    (i) => i.feedback?.recommendation === "Hire" || i.feedback?.recommendation === "Strong Hire",
+  );
+}
+
+export function getOfferConversionReport(offers: Offer[]): ConversionReport {
+  return getConversionReport(
+    offers.filter((o) => o.status !== "Draft"),
+    (o) => o.status === "Accepted",
+  );
+}
+
+/* ------------------------------------------------------------------ */
+/* Employee Lifecycle — Confirmations/Transfers/Promotions/Salary        */
+/* Revisions/Manager Changes/Shift Changes all read the SAME event log   */
+/* (EmployeeLifecycleEvent, written by employee-lifecycle-context.tsx),         */
+/* filtered by eventType — one generic selector, not one per event type. */
+/* ------------------------------------------------------------------ */
+
+/** Events of one type within a date range, most recent first — the shared basis for every lifecycle report (Confirmations/Transfers/Promotions/Salary Revisions/...). */
+export function getEmployeeLifecycleEventsByType(
+  events: EmployeeLifecycleEvent[],
+  eventType: EmployeeLifecycleEvent["eventType"],
+  range: { from: string; to: string },
+): EmployeeLifecycleEvent[] {
+  return events
+    .filter((e) => e.eventType === eventType && e.date >= range.from && e.date <= range.to)
+    .sort((a, b) => (a.date < b.date ? 1 : -1));
+}
+
+/* ------------------------------------------------------------------ */
+/* Performance — real numbers off PerformanceReviewCase/PerformanceGoal/ */
+/* AppraisalDecision (performance-context.tsx); joins to department/site */
+/* through the same ReportEmployeeRow dimension pattern every other      */
+/* breakdown here already uses.                                          */
+/* ------------------------------------------------------------------ */
+
+export interface PerformanceCompletionReport {
+  totalCases: number;
+  completed: number;
+  completionPct: number;
+  averageRating: number;
+}
+
+/** Average is over completed cases only (finalScore is undefined until Manager Review is submitted) — never over the full case list. */
+export function getPerformanceCompletionReport(cases: PerformanceReviewCase[]): PerformanceCompletionReport {
+  const completed = cases.filter((c) => c.stage === "Completed" && c.finalScore !== undefined);
+  const averageRating = completed.length > 0 ? round(completed.reduce((sum, c) => sum + (c.finalScore ?? 0), 0) / completed.length, 2) : 0;
+  return {
+    totalCases: cases.length,
+    completed: completed.length,
+    completionPct: cases.length > 0 ? round((completed.length / cases.length) * 100) : 0,
+    averageRating,
+  };
+}
+
+export interface GoalCompletionReport {
+  total: number;
+  completed: number;
+  pending: number;
+}
+
+export function getGoalCompletionReport(goals: PerformanceGoal[]): GoalCompletionReport {
+  const completed = goals.filter((g) => g.status === "Completed").length;
+  return { total: goals.length, completed, pending: goals.length - completed };
+}
+
+export interface RatingDistributionRow {
+  rating: number;
+  count: number;
+}
+
+/** Whole-number buckets (1-5) of every rated case's rounded finalScore. */
+export function getRatingDistribution(cases: PerformanceReviewCase[]): RatingDistributionRow[] {
+  const rated = cases.filter((c) => c.finalScore !== undefined);
+  const buckets = new Map<number, number>([1, 2, 3, 4, 5].map((r) => [r, 0]));
+  for (const c of rated) {
+    const bucket = Math.min(5, Math.max(1, Math.round(c.finalScore!)));
+    buckets.set(bucket, (buckets.get(bucket) ?? 0) + 1);
+  }
+  return Array.from(buckets.entries()).map(([rating, count]) => ({ rating, count }));
+}
+
+export interface DimensionRatingRow {
+  name: string;
+  averageRating: number;
+  count: number;
+}
+
+/** Average finalScore grouped by any employee dimension (department/site/...) via the same ReportEmployeeRow join every other breakdown here uses. */
+export function getPerformanceRatingBreakdown(
+  cases: PerformanceReviewCase[],
+  rows: ReportEmployeeRow[],
+  dimension: (row: ReportEmployeeRow) => string,
+): DimensionRatingRow[] {
+  const rowByEmployeeId = new Map(rows.map((r) => [r.employeeId, r]));
+  const groups = new Map<string, number[]>();
+  for (const c of cases) {
+    if (c.finalScore === undefined) continue;
+    const row = rowByEmployeeId.get(c.employeeId);
+    if (!row) continue;
+    const key = dimension(row);
+    if (!groups.has(key)) groups.set(key, []);
+    groups.get(key)!.push(c.finalScore);
+  }
+  return Array.from(groups.entries())
+    .map(([name, scores]) => ({ name, averageRating: round(scores.reduce((a, b) => a + b, 0) / scores.length, 2), count: scores.length }))
+    .sort((a, b) => b.averageRating - a.averageRating);
+}
+
+/** Approved-or-later appraisals recommending a promotion, most recent first — "recommendation" here means an appraisal decision that has actually cleared approval, not every draft. */
+export function getPromotionRecommendations(appraisals: AppraisalDecision[]): AppraisalDecision[] {
+  return appraisals
+    .filter((a) => a.promotion && (a.status === "Approved" || a.status === "Applied"))
+    .sort((a, b) => (a.effectiveDate < b.effectiveDate ? 1 : -1));
+}
+
+/** Approved-or-later appraisals carrying a real CTC change — same "cleared approval" bar as promotions. */
+export function getSalaryRevisionRecommendations(appraisals: AppraisalDecision[]): AppraisalDecision[] {
+  return appraisals
+    .filter((a) => (a.status === "Approved" || a.status === "Applied") && a.proposedCtcAnnual !== undefined && a.proposedCtcAnnual !== a.previousCtcAnnual)
+    .sort((a, b) => (a.effectiveDate < b.effectiveDate ? 1 : -1));
+}
+
+/* ------------------------------------------------------------------ */
+/* Training — real numbers off TrainingProgram/TrainingEnrollment       */
+/* (training-context.tsx); joins to department/site through the same    */
+/* ReportEmployeeRow dimension pattern every other breakdown here uses.  */
+/* ------------------------------------------------------------------ */
+
+export interface TrainingProgramReport {
+  totalPrograms: number;
+  employeesTrained: number;
+  completionRatePct: number;
+  totalTrainingHours: number;
+  failed: number;
+  noShow: number;
+  /** undefined when no program in scope has ever had a cost figure entered — never a fabricated total (section 23/29). */
+  totalCost?: number;
+}
+
+export function getTrainingProgramReport(programs: TrainingProgram[], enrollments: TrainingEnrollment[]): TrainingProgramReport {
+  const active = activeEnrollments(enrollments);
+  const completed = active.filter((e) => e.status === "Completed");
+  const programById = new Map(programs.map((p) => [p.id, p]));
+  const totalTrainingHours = completed.reduce((sum, e) => sum + (programById.get(e.trainingProgramId)?.durationHours ?? 0), 0);
+  const employeesTrained = new Set(completed.map((e) => e.employeeId)).size;
+  const anyCostEntered = programs.some((p) => p.programCost !== undefined || p.perEmployeeCost !== undefined || p.vendorCost !== undefined);
+  const totalCost = anyCostEntered
+    ? programs.reduce((sum, p) => sum + (p.programCost ?? 0) + (p.vendorCost ?? 0), 0) +
+      active.reduce((sum, e) => sum + (programById.get(e.trainingProgramId)?.perEmployeeCost ?? 0), 0)
+    : undefined;
+  return {
+    totalPrograms: programs.length,
+    employeesTrained,
+    completionRatePct: active.length > 0 ? round((completed.length / active.length) * 100) : 0,
+    totalTrainingHours,
+    failed: active.filter((e) => e.status === "Failed").length,
+    noShow: active.filter((e) => e.status === "No Show").length,
+    totalCost,
+  };
+}
+
+export interface DimensionCountRow {
+  name: string;
+  count: number;
+}
+
+/** Completed-enrollment counts grouped by any employee dimension (department/site/...) via the same ReportEmployeeRow join every other breakdown here uses. */
+export function getTrainingBreakdown(enrollments: TrainingEnrollment[], rows: ReportEmployeeRow[], dimension: (row: ReportEmployeeRow) => string): DimensionCountRow[] {
+  const rowByEmployeeId = new Map(rows.map((r) => [r.employeeId, r]));
+  const completed = activeEnrollments(enrollments).filter((e) => e.status === "Completed");
+  const counts = new Map<string, number>();
+  for (const e of completed) {
+    const row = rowByEmployeeId.get(e.employeeId);
+    if (!row) continue;
+    const key = dimension(row);
+    counts.set(key, (counts.get(key) ?? 0) + 1);
+  }
+  return Array.from(counts.entries())
+    .map(([name, count]) => ({ name, count }))
+    .sort((a, b) => b.count - a.count);
+}
+
+export interface SkillDistributionRow {
+  skillId: string;
+  levelId: string;
+  count: number;
+}
+
+/** How many employees (in scope) currently sit at each skill/level pair — each employee's LATEST record only, never historical duplicates. */
+export function getSkillDistribution(skills: EmployeeSkill[], employeeIds: string[]): SkillDistributionRow[] {
+  const idSet = new Set(employeeIds);
+  const current = employeeIds.flatMap((id) => selectCurrentSkills(skills, id));
+  const scoped = current.filter((s) => idSet.has(s.employeeId));
+  const counts = new Map<string, number>();
+  for (const s of scoped) {
+    const key = `${s.skillId}::${s.skillLevelId}`;
+    counts.set(key, (counts.get(key) ?? 0) + 1);
+  }
+  return Array.from(counts.entries()).map(([key, count]) => {
+    const [skillId, levelId] = key.split("::");
+    return { skillId, levelId, count };
+  });
+}
+
+/* ------------------------------------------------------------------ */
+/* Assets — real numbers off Asset/AssetAssignment (asset-context.tsx);  */
+/* joins to department/site/employee through the same ReportEmployeeRow  */
+/* dimension pattern every other breakdown here uses.                    */
+/* ------------------------------------------------------------------ */
+
+export interface AssetReport {
+  total: number;
+  assigned: number;
+  available: number;
+  maintenance: number;
+  damaged: number;
+  retired: number;
+  pendingReturns: number;
+  /** undefined when no asset in scope has ever had a purchase cost entered — never a fabricated total (section 21/29). */
+  totalValue?: number;
+}
+
+export function getAssetReport(assets: Asset[], assignments: AssetAssignment[], employeeIdsOnNotice: string[]): AssetReport {
+  const summary = getAssetInventorySummary(assets);
+  const noticeSet = new Set(employeeIdsOnNotice);
+  const pendingReturns = assignments.filter((a) => !a.returnedDate && noticeSet.has(a.employeeId)).length;
+  const anyCostEntered = assets.some((a) => a.purchaseCost !== undefined);
+  const totalValue = anyCostEntered ? assets.reduce((sum, a) => sum + (a.purchaseCost ?? 0), 0) : undefined;
+  return {
+    total: summary.total,
+    assigned: summary.assigned,
+    available: summary.available,
+    maintenance: summary.maintenance,
+    damaged: summary.damaged,
+    retired: summary.retired,
+    pendingReturns,
+    totalValue,
+  };
+}
+
+export interface AssetTypeCountRow {
+  assetTypeId: string;
+  count: number;
+}
+
+export function getAssetsByType(assets: Asset[]): AssetTypeCountRow[] {
+  const counts = new Map<string, number>();
+  for (const a of assets) counts.set(a.assetTypeId, (counts.get(a.assetTypeId) ?? 0) + 1);
+  return Array.from(counts.entries())
+    .map(([assetTypeId, count]) => ({ assetTypeId, count }))
+    .sort((a, b) => b.count - a.count);
+}
+
+/** Currently-active-assignment counts grouped by any employee dimension (department/site/...) via the same ReportEmployeeRow join every other breakdown here uses. */
+export function getAssetsByDimension(assignments: AssetAssignment[], rows: ReportEmployeeRow[], dimension: (row: ReportEmployeeRow) => string): DimensionCountRow[] {
+  const rowByEmployeeId = new Map(rows.map((r) => [r.employeeId, r]));
+  const active = assignments.filter((a) => !a.returnedDate);
+  const counts = new Map<string, number>();
+  for (const a of active) {
+    const row = rowByEmployeeId.get(a.employeeId);
+    if (!row) continue;
+    const key = dimension(row);
+    counts.set(key, (counts.get(key) ?? 0) + 1);
+  }
+  return Array.from(counts.entries())
+    .map(([name, count]) => ({ name, count }))
+    .sort((a, b) => b.count - a.count);
+}
+
+export interface EmployeeAssetCountRow {
+  employeeId: string;
+  name: string;
+  count: number;
+}
+
+/** Employees currently holding the most active assets, most first. */
+export function getAssetsByEmployee(assignments: AssetAssignment[], rows: ReportEmployeeRow[]): EmployeeAssetCountRow[] {
+  const rowByEmployeeId = new Map(rows.map((r) => [r.employeeId, r]));
+  const active = assignments.filter((a) => !a.returnedDate);
+  const counts = new Map<string, number>();
+  for (const a of active) counts.set(a.employeeId, (counts.get(a.employeeId) ?? 0) + 1);
+  return Array.from(counts.entries())
+    .map(([employeeId, count]) => ({ employeeId, name: rowByEmployeeId.get(employeeId)?.name ?? employeeId, count }))
+    .sort((a, b) => b.count - a.count);
+}
+
+/* ------------------------------------------------------------------ */
+/* Expenses & Travel (Phase 16)                                        */
+/* ------------------------------------------------------------------ */
+
+export interface ExpenseReport {
+  totalClaims: number;
+  claimedAmount: number;
+  approvedAmount: number;
+  reimbursedAmount: number;
+  outstandingAmount: number;
+}
+
+/** Reuses expense-engine's getExpenseSummary — never a second calculation of the same totals. */
+export function getExpenseReport(claims: ExpenseClaim[]): ExpenseReport {
+  const summary = getExpenseSummary(claims);
+  return {
+    totalClaims: summary.totalClaims,
+    claimedAmount: summary.claimedAmount,
+    approvedAmount: summary.approvedAmount,
+    reimbursedAmount: summary.reimbursedAmount,
+    outstandingAmount: summary.outstandingAmount,
+  };
+}
+
+export interface TravelReport {
+  totalRequests: number;
+  approved: number;
+  rejected: number;
+  estimatedCost: number;
+}
+
+export function getTravelReport(requests: TravelRequest[]): TravelReport {
+  const summary = getTravelSummary(requests);
+  return { totalRequests: summary.total, approved: summary.approved, rejected: summary.rejected, estimatedCost: summary.estimatedCost };
+}
+
+/** Only claims that actually left Draft count as real spend activity — a Draft is scratch state, not data (section 21/23). */
+function decidedClaims(claims: ExpenseClaim[]): ExpenseClaim[] {
+  return claims.filter((c) => c.status !== "Draft" && c.status !== "Cancelled");
+}
+
+export interface CategoryAmountRow {
+  categoryId: string;
+  claimedAmount: number;
+}
+
+/** Claimed amount grouped by ExpenseCategory master id — category names are resolved by the caller (never duplicated here). */
+export function getExpensesByCategory(claims: ExpenseClaim[]): CategoryAmountRow[] {
+  const totals = new Map<string, number>();
+  for (const c of decidedClaims(claims)) {
+    for (const item of c.items) totals.set(item.categoryId, (totals.get(item.categoryId) ?? 0) + item.amount);
+  }
+  return Array.from(totals.entries())
+    .map(([categoryId, claimedAmount]) => ({ categoryId, claimedAmount }))
+    .sort((a, b) => b.claimedAmount - a.claimedAmount);
+}
+
+/** Claimed amount grouped by any employee dimension (department/site/...) via the same ReportEmployeeRow join every other breakdown here uses. */
+export function getExpensesByDimension(claims: ExpenseClaim[], rows: ReportEmployeeRow[], dimension: (row: ReportEmployeeRow) => string): DimensionCountRow[] {
+  const rowByEmployeeId = new Map(rows.map((r) => [r.employeeId, r]));
+  const totals = new Map<string, number>();
+  for (const c of decidedClaims(claims)) {
+    const row = rowByEmployeeId.get(c.employeeId);
+    if (!row) continue;
+    const key = dimension(row);
+    totals.set(key, (totals.get(key) ?? 0) + c.totalAmount);
+  }
+  return Array.from(totals.entries())
+    .map(([name, count]) => ({ name, count }))
+    .sort((a, b) => b.count - a.count);
+}
+
+export interface EmployeeExpenseAmountRow {
+  employeeId: string;
+  name: string;
+  claimedAmount: number;
+}
+
+export function getExpensesByEmployee(claims: ExpenseClaim[], rows: ReportEmployeeRow[]): EmployeeExpenseAmountRow[] {
+  const rowByEmployeeId = new Map(rows.map((r) => [r.employeeId, r]));
+  const totals = new Map<string, number>();
+  for (const c of decidedClaims(claims)) totals.set(c.employeeId, (totals.get(c.employeeId) ?? 0) + c.totalAmount);
+  return Array.from(totals.entries())
+    .map(([employeeId, claimedAmount]) => ({ employeeId, name: rowByEmployeeId.get(employeeId)?.name ?? employeeId, claimedAmount }))
+    .sort((a, b) => b.claimedAmount - a.claimedAmount);
+}
+
+export interface TravelTypeCountRow {
+  travelType: string;
+  count: number;
+}
+
+export function getTravelByType(requests: TravelRequest[]): TravelTypeCountRow[] {
+  const counts = new Map<string, number>();
+  for (const r of requests) counts.set(r.travelType, (counts.get(r.travelType) ?? 0) + 1);
+  return Array.from(counts.entries())
+    .map(([travelType, count]) => ({ travelType, count }))
+    .sort((a, b) => b.count - a.count);
+}
+
+export interface MonthlyExpenseTrendPoint {
+  month: string;
+  claimed: number;
+  approved: number;
+  reimbursed: number;
+}
+
+/** Only months with an actual submitted claim appear — never a fabricated zero-filled history (section 23). */
+export function getMonthlyExpenseTrend(claims: ExpenseClaim[]): MonthlyExpenseTrendPoint[] {
+  const byMonth = new Map<string, { claimed: number; approved: number; reimbursed: number }>();
+  for (const c of decidedClaims(claims)) {
+    const month = (c.submittedOn ?? "").slice(0, 7);
+    if (!month) continue;
+    const bucket = byMonth.get(month) ?? { claimed: 0, approved: 0, reimbursed: 0 };
+    bucket.claimed += c.totalAmount;
+    bucket.approved += c.approvedAmount ?? 0;
+    bucket.reimbursed += c.reimbursedAmount ?? 0;
+    byMonth.set(month, bucket);
+  }
+  return Array.from(byMonth.entries())
+    .map(([month, v]) => ({ month, ...v }))
+    .sort((a, b) => (a.month < b.month ? -1 : 1));
 }

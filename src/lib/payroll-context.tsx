@@ -21,6 +21,7 @@ import {
   computeAttendanceForPayroll,
   listWorkingDaysInMonth,
   resolveComponentRates,
+  selectSalaryStructureForMonth,
 } from "@/lib/payroll-engine";
 import { useAccessControl } from "@/lib/access-control-context";
 import { useEmployees } from "@/lib/employee-context";
@@ -86,15 +87,27 @@ interface PayrollContextValue {
 
   // Salary structure
   salaryStructures: EmployeeSalaryStructure[];
+  /** Whatever version is effective today — for display purposes (Employee Profile, "Assign"/"Revise" defaults). */
   salaryStructureFor: (employeeId: string) => EmployeeSalaryStructure | undefined;
+  /** Every version for this employee, oldest first — the real Salary History (Phase 12 section 11). */
+  salaryHistoryFor: (employeeId: string) => EmployeeSalaryStructure[];
   canManageSalary: boolean;
   defaultSalaryLinesFor: (siteId: string, ctcAnnual: number) => { earnings: SalaryLine[]; deductions: SalaryLine[]; grossMonthly: number };
+  /**
+   * Always creates a NEW dated version — never overwrites an existing one —
+   * so already-processed payroll for earlier months keeps using the salary
+   * that was actually effective then (Phase 12 section 10). The very first
+   * structure ever saved for an employee is just version 1 of this same
+   * append-only history.
+   */
   saveSalaryStructure: (input: {
     employeeId: string;
     siteId: string;
     ctcAnnual: number;
     earnings: SalaryLine[];
     deductions: SalaryLine[];
+    effectiveFrom?: string;
+    reason?: string;
   }) => ActionResult;
 
   // Payroll runs / payslips
@@ -328,7 +341,15 @@ export function PayrollProvider({ children }: { children: ReactNode }) {
   const canApprovePayroll = canFeature("payroll.payslips", "manage");
 
   const salaryStructureFor = useCallback(
-    (employeeId: string) => salaryStructures.find((s) => s.employeeId === employeeId),
+    (employeeId: string) => selectSalaryStructureForMonth(salaryStructures, employeeId, new Date().toISOString().slice(0, 7)),
+    [salaryStructures],
+  );
+
+  const salaryHistoryFor = useCallback(
+    (employeeId: string) =>
+      salaryStructures
+        .filter((s) => s.employeeId === employeeId)
+        .sort((a, b) => (a.effectiveFrom < b.effectiveFrom ? -1 : 1)),
     [salaryStructures],
   );
 
@@ -342,29 +363,37 @@ export function PayrollProvider({ children }: { children: ReactNode }) {
   );
 
   const saveSalaryStructure = useCallback(
-    (input: { employeeId: string; siteId: string; ctcAnnual: number; earnings: SalaryLine[]; deductions: SalaryLine[] }): ActionResult => {
+    (input: {
+      employeeId: string;
+      siteId: string;
+      ctcAnnual: number;
+      earnings: SalaryLine[];
+      deductions: SalaryLine[];
+      effectiveFrom?: string;
+      reason?: string;
+    }): ActionResult => {
       if (!canManageSalary) return { ok: false, message: "You're not authorized to manage salary structures." };
       if (input.ctcAnnual <= 0) return { ok: false, message: "Annual CTC must be greater than zero." };
       const grossMonthly = input.earnings.reduce((sum, e) => sum + e.amount, 0);
-      const existing = salaryStructuresStore.getSnapshot().find((s) => s.employeeId === input.employeeId);
+      const effectiveFrom = input.effectiveFrom ?? new Date().toISOString().slice(0, 10);
       const record: EmployeeSalaryStructure = {
-        id: existing?.id ?? `salary-${input.employeeId}-${Date.now().toString(36)}`,
+        id: `salary-${input.employeeId}-${Date.now().toString(36)}`,
         employeeId: input.employeeId,
         siteId: input.siteId,
-        effectiveFrom: existing?.effectiveFrom ?? new Date().toISOString().slice(0, 10),
+        effectiveFrom,
         ctcAnnual: input.ctcAnnual,
         earnings: input.earnings,
         deductions: input.deductions,
         grossMonthly,
         updatedOn: new Date().toISOString(),
         updatedBy: currentUser.name,
+        reason: input.reason,
       };
-      salaryStructuresStore.set(
-        existing
-          ? salaryStructuresStore.getSnapshot().map((s) => (s.id === existing.id ? record : s))
-          : [record, ...salaryStructuresStore.getSnapshot()],
-      );
-      return { ok: true, message: "Salary structure saved." };
+      // Always a new version, appended — never mutates an earlier one, so
+      // payroll already processed for a prior month keeps reading whatever
+      // was effective then (see selectSalaryStructureForMonth).
+      salaryStructuresStore.set([record, ...salaryStructuresStore.getSnapshot()]);
+      return { ok: true, message: `Salary structure saved, effective ${effectiveFrom}.` };
     },
     [canManageSalary, currentUser.name],
   );
@@ -412,7 +441,7 @@ export function PayrollProvider({ children }: { children: ReactNode }) {
       );
 
       return siteEmployees.map((emp) => {
-        const structure = salaryStructures.find((s) => s.employeeId === emp.employeeId);
+        const structure = selectSalaryStructureForMonth(salaryStructures, emp.employeeId, month);
         if (!structure) {
           return { employeeId: emp.employeeId, employeeName: emp.name, hasSalaryStructure: false };
         }
@@ -587,6 +616,7 @@ export function PayrollProvider({ children }: { children: ReactNode }) {
       decideTaxDeclaration,
       salaryStructures,
       salaryStructureFor,
+      salaryHistoryFor,
       canManageSalary,
       defaultSalaryLinesFor,
       saveSalaryStructure,
@@ -619,6 +649,7 @@ export function PayrollProvider({ children }: { children: ReactNode }) {
       decideTaxDeclaration,
       salaryStructures,
       salaryStructureFor,
+      salaryHistoryFor,
       canManageSalary,
       defaultSalaryLinesFor,
       saveSalaryStructure,

@@ -122,10 +122,10 @@ export const seedSeparationCases: SeparationCase[] = [
     siteId: "site-2",
     type: "Resignation",
     reason: "Higher Studies",
-    resignationDate: "2024-06-10",
+    resignationDate: "2026-08-01",
     noticePeriodDays: 30,
-    lastWorkingDay: "2024-07-10",
-    status: "Pending Approval",
+    lastWorkingDay: "2026-08-31",
+    status: "Approved",
     initiatedBy: "Vikram Desai",
     clearanceItems: buildClearanceItems("off-2"),
     exitInterview: { status: "Not Scheduled" },
@@ -204,7 +204,8 @@ export const seedSeparationCases: SeparationCase[] = [
 
 export const seedOffboardingAudit: OffboardingAuditEntry[] = [
   { id: "off-evt-1", caseId: "off-1", employeeName: "Rahul Mehta", action: "completed", actorName: "Neha Verma", detail: "Offboarding completed — F&F settlement paid", timestamp: "2024-03-05T10:00:00.000Z" },
-  { id: "off-evt-2", caseId: "off-2", employeeName: "Vikram Desai", action: "initiated", actorName: "Vikram Desai", detail: "Resignation submitted — reason: Higher Studies", timestamp: "2024-06-10T09:00:00.000Z" },
+  { id: "off-evt-2", caseId: "off-2", employeeName: "Vikram Desai", action: "initiated", actorName: "Vikram Desai", detail: "Resignation submitted — reason: Higher Studies", timestamp: "2026-08-01T09:00:00.000Z" },
+  { id: "off-evt-2b", caseId: "off-2", employeeName: "Vikram Desai", action: "approved", actorName: "Ganesh Pandey", detail: "Resignation approved — notice period in effect", timestamp: "2026-08-02T09:00:00.000Z" },
   { id: "off-evt-3", caseId: "off-3", employeeName: "Anjali Kumari", action: "approved", actorName: "Ganesh Pandey", detail: "Resignation approved", timestamp: "2024-05-02T09:00:00.000Z" },
   { id: "off-evt-4", caseId: "off-4", employeeName: "Priya Singh", action: "rejected", actorName: "Rohit Sharma", detail: "Resignation rejected — retention conversation requested", timestamp: "2024-05-25T09:00:00.000Z" },
 ];

@@ -12,8 +12,8 @@ import { StatusBadge } from "@/components/ui/status-badge";
 import { StatCard } from "@/components/ui/stat-card";
 import { Can } from "@/components/auth/permission-gate";
 import { EmptyRow, TBody, TableFootnote, Td, Th, THead, Table, Tr } from "@/components/ui/table";
-import { employees } from "@/lib/mock-data";
 import { separationReasons } from "@/lib/offboarding-data";
+import { useEmployees } from "@/lib/employee-context";
 import { useOffboarding } from "@/lib/offboarding-context";
 import { useAccessControl } from "@/lib/access-control-context";
 import { useSiteFilter } from "@/lib/site-context";
@@ -24,6 +24,7 @@ const separationTypes: SeparationType[] = ["Resignation", "Termination", "Retire
 
 export default function OffboardingPage() {
   const { currentUser } = useAccessControl();
+  const { employees } = useEmployees();
   const toast = useToast();
   const { visibleCases, canManage, initiateSeparation } = useOffboarding();
   const [modalOpen, setModalOpen] = useState(false);

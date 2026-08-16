@@ -194,15 +194,20 @@ function DashboardTab() {
   );
 }
 
+function todayStr() {
+  return new Date().toISOString().slice(0, 10);
+}
+
 function SalaryStructureTab() {
   const { currentSite, currentSiteId, isAllSites } = useSite();
   const { employees } = useEmployees();
-  const { salaryStructureFor, defaultSalaryLinesFor, saveSalaryStructure } = usePayroll();
+  const { salaryStructureFor, salaryHistoryFor, defaultSalaryLinesFor, saveSalaryStructure } = usePayroll();
   const toast = useToast();
   const [editTarget, setEditTarget] = useState<{ employeeId: string; name: string } | null>(null);
   const [ctcDraft, setCtcDraft] = useState(0);
   const [earningsDraft, setEarningsDraft] = useState<SalaryLine[]>([]);
   const [deductionsDraft, setDeductionsDraft] = useState<SalaryLine[]>([]);
+  const [historyTarget, setHistoryTarget] = useState<{ employeeId: string; name: string } | null>(null);
 
   if (isAllSites || !currentSiteId) {
     return (
@@ -238,12 +243,15 @@ function SalaryStructureTab() {
   function handleSave(e: FormEvent<HTMLFormElement>) {
     e.preventDefault();
     if (!editTarget || !currentSiteId) return;
+    const form = new FormData(e.currentTarget);
     const result = saveSalaryStructure({
       employeeId: editTarget.employeeId,
       siteId: currentSiteId,
       ctcAnnual: ctcDraft,
       earnings: earningsDraft,
       deductions: deductionsDraft,
+      effectiveFrom: String(form.get("effectiveFrom") ?? todayStr()),
+      reason: String(form.get("reason") ?? "").trim() || undefined,
     });
     (result.ok ? toast.success : toast.error)(result.message);
     if (result.ok) setEditTarget(null);
@@ -271,12 +279,22 @@ function SalaryStructureTab() {
                   <Td>{structure ? inr(structure.ctcAnnual) : <span className="text-xs text-slate-400 dark:text-slate-500">Not configured</span>}</Td>
                   <Td>{structure ? inr(structure.grossMonthly) : "—"}</Td>
                   <Td>
-                    <button
-                      onClick={() => openEditor(e.employeeId, e.name)}
-                      className="text-sm font-medium text-indigo-600 hover:underline dark:text-indigo-400"
-                    >
-                      {structure ? "Edit" : "Assign"}
-                    </button>
+                    <div className="flex items-center gap-3">
+                      <button
+                        onClick={() => openEditor(e.employeeId, e.name)}
+                        className="text-sm font-medium text-indigo-600 hover:underline dark:text-indigo-400"
+                      >
+                        {structure ? "Revise" : "Assign"}
+                      </button>
+                      {salaryHistoryFor(e.employeeId).length > 1 && (
+                        <button
+                          onClick={() => setHistoryTarget({ employeeId: e.employeeId, name: e.name })}
+                          className="text-sm font-medium text-slate-500 hover:underline dark:text-slate-400"
+                        >
+                          History
+                        </button>
+                      )}
+                    </div>
                   </Td>
                 </Tr>
               );
@@ -288,6 +306,19 @@ function SalaryStructureTab() {
 
       <Modal open={Boolean(editTarget)} onClose={() => setEditTarget(null)} title={`Salary Structure — ${editTarget?.name ?? ""}`}>
         <form className="space-y-4" onSubmit={handleSave}>
+          {editTarget && salaryStructureFor(editTarget.employeeId) && (
+            <p className="text-xs text-slate-400 dark:text-slate-500">
+              Saving creates a new version — payroll already processed for earlier months keeps using whatever was effective then.
+            </p>
+          )}
+          <div className="grid grid-cols-2 gap-4">
+            <Field label="Effective From">
+              <Input name="effectiveFrom" type="date" required defaultValue={todayStr()} />
+            </Field>
+            <Field label="Reason (optional)">
+              <Input name="reason" placeholder="e.g. Annual increment" />
+            </Field>
+          </div>
           <Field label="Annual CTC (₹)">
             <Input
               type="number"
@@ -356,6 +387,31 @@ function SalaryStructureTab() {
             </Button>
           </div>
         </form>
+      </Modal>
+
+      <Modal open={Boolean(historyTarget)} onClose={() => setHistoryTarget(null)} title={`Salary History — ${historyTarget?.name ?? ""}`}>
+        {historyTarget && (
+          <div className="divide-y divide-slate-100 dark:divide-slate-800">
+            {salaryHistoryFor(historyTarget.employeeId)
+              .slice()
+              .reverse()
+              .map((s, i, arr) => {
+                const previous = arr[i + 1];
+                return (
+                  <div key={s.id} className="py-3 text-sm">
+                    <p className="font-medium text-slate-700 dark:text-slate-200">
+                      {inr(s.ctcAnnual)}
+                      {previous && <span className="ml-2 text-xs font-normal text-slate-400 dark:text-slate-500">(was {inr(previous.ctcAnnual)})</span>}
+                    </p>
+                    <p className="text-xs text-slate-400 dark:text-slate-500">
+                      Effective {s.effectiveFrom} &middot; by {s.updatedBy ?? "—"}
+                      {s.reason && ` · ${s.reason}`}
+                    </p>
+                  </div>
+                );
+              })}
+          </div>
+        )}
       </Modal>
     </div>
   );

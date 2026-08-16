@@ -12,7 +12,7 @@ import { Button } from "@/components/ui/button";
 import { Modal } from "@/components/ui/modal";
 import { Field, Select, Textarea } from "@/components/ui/form";
 import { TBody, Td, Th, THead, Table, Tr } from "@/components/ui/table";
-import { employees } from "@/lib/mock-data";
+import { useEmployees } from "@/lib/employee-context";
 import { useOnboarding } from "@/lib/onboarding-context";
 import { useAccessControl } from "@/lib/access-control-context";
 import { useToast } from "@/lib/toast-context";
@@ -46,6 +46,7 @@ export default function OnboardingCaseDetailPage(props: PageProps<"/onboarding/[
   } = useOnboarding();
 
   const record = caseById(id);
+  const { employees } = useEmployees();
   if (!record) {
     notFound();
     return null;

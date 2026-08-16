@@ -40,7 +40,10 @@ export default function EmployeesPage() {
 
   const [search, setSearch] = useState("");
   const [department, setDepartment] = useState("All Departments");
-  const [status, setStatus] = useState("All Status");
+  // Defaults to Active — the directory's primary purpose is the current
+  // roster; Inactive/Exited employees stay fully on file, just a filter away.
+  const [status, setStatus] = useState("Active");
+  const [stage, setStage] = useState("All Stages");
   const [page, setPage] = useState(1);
 
   const [addOpen, setAddOpen] = useState(false);
@@ -57,13 +60,14 @@ export default function EmployeesPage() {
         e.email.toLowerCase().includes(search.toLowerCase());
       const matchesDept = department === "All Departments" || e.department === department;
       const matchesStatus = status === "All Status" || e.status === status;
-      return matchesSite && matchesSearch && matchesDept && matchesStatus;
+      const matchesStage = stage === "All Stages" || e.employmentStage === stage;
+      return matchesSite && matchesSearch && matchesDept && matchesStatus && matchesStage;
     });
-  }, [employees, search, department, status, currentSiteId, isAllSites]);
+  }, [employees, search, department, status, stage, currentSiteId, isAllSites]);
 
   // Reset to page 1 whenever the filters change — adjusted during render
   // (not an effect) per React's "storing information from previous renders" pattern.
-  const filterKey = `${search}|${department}|${status}|${currentSiteId}|${isAllSites}`;
+  const filterKey = `${search}|${department}|${status}|${stage}|${currentSiteId}|${isAllSites}`;
   const [prevFilterKey, setPrevFilterKey] = useState(filterKey);
   if (filterKey !== prevFilterKey) {
     setPrevFilterKey(filterKey);
@@ -187,6 +191,13 @@ export default function EmployeesPage() {
             <option>Active</option>
             <option>Inactive</option>
           </Select>
+          <Select value={stage} onChange={(e) => setStage(e.target.value)} className="w-auto">
+            <option>All Stages</option>
+            <option>Probation</option>
+            <option>Confirmed</option>
+            <option>On Notice</option>
+            <option>Exited</option>
+          </Select>
         </div>
 
         <Table>
@@ -197,6 +208,7 @@ export default function EmployeesPage() {
             <Th>Department</Th>
             <Th>Designation</Th>
             <Th>Status</Th>
+            <Th>Stage</Th>
             <Th>Actions</Th>
           </THead>
           <TBody>
@@ -231,6 +243,9 @@ export default function EmployeesPage() {
                 <Td>{employee.designation}</Td>
                 <Td>
                   <StatusBadge status={employee.status} />
+                </Td>
+                <Td>
+                  {employee.employmentStage ? <StatusBadge status={employee.employmentStage} /> : <span className="text-slate-300 dark:text-slate-600">—</span>}
                 </Td>
                 <Td>
                   <div className="flex items-center gap-3">
@@ -270,7 +285,7 @@ export default function EmployeesPage() {
               </Tr>
             ))}
             {filtered.length === 0 && (
-              <EmptyRow colSpan={isAllSites ? 7 : 6}>No employees match your filters.</EmptyRow>
+              <EmptyRow colSpan={isAllSites ? 8 : 7}>No employees match your filters.</EmptyRow>
             )}
           </TBody>
         </Table>

@@ -3,28 +3,45 @@
 import Link from "next/link";
 import { useRouter } from "next/navigation";
 import { useState } from "react";
-import { Bell, CalendarCheck, CalendarOff, ChevronDown, LogOut, Network, RefreshCw, Search, ShieldCheck, UserRound } from "lucide-react";
+import { Bell, CheckCheck, ChevronDown, LogOut, ShieldCheck, UserRound } from "lucide-react";
 import { Avatar } from "@/components/ui/avatar";
 import { logout } from "@/lib/auth";
-import { recentActivities } from "@/lib/mock-data";
 import { useCurrentUser } from "@/lib/access-control-context";
-import { useOrg } from "@/lib/org-context";
-import { useLeave } from "@/lib/leave-context";
-import { useRegularization } from "@/lib/regularization-context";
+import { useEmployees } from "@/lib/employee-context";
+import { useNotifications } from "@/lib/notification-context";
+import { GlobalSearch } from "@/components/layout/global-search";
 import { SiteSwitcher } from "@/components/layout/site-switcher";
 import { ThemeToggle } from "@/components/layout/theme-toggle";
+
+function notifTone(type: string) {
+  if (type === "success") return "bg-emerald-100 text-emerald-600 dark:bg-emerald-500/15 dark:text-emerald-400";
+  if (type === "warning") return "bg-rose-100 text-rose-600 dark:bg-rose-500/15 dark:text-rose-400";
+  if (type === "action_required") return "bg-amber-100 text-amber-600 dark:bg-amber-500/15 dark:text-amber-400";
+  return "bg-indigo-100 text-indigo-600 dark:bg-indigo-500/15 dark:text-indigo-400";
+}
+
+function notifTimeAgo(iso: string) {
+  const minutes = Math.round((Date.now() - new Date(iso).getTime()) / 60_000);
+  if (minutes < 1) return "just now";
+  if (minutes < 60) return `${minutes} min ago`;
+  const hours = Math.round(minutes / 60);
+  if (hours < 24) return `${hours} hr ago`;
+  return `${Math.round(hours / 24)} day(s) ago`;
+}
 
 export function Topbar({ title }: { title?: string }) {
   const router = useRouter();
   const currentUser = useCurrentUser();
-  const { auditEntries: orgAuditEntries } = useOrg();
-  const { visibleTeamRequests } = useLeave();
-  const { visibleTeamRequests: visibleTeamRegularizations } = useRegularization();
+  const { getEmployeeByEmployeeId } = useEmployees();
+  const { myNotifications, unreadCount, markRead, markAllRead } = useNotifications();
   const [open, setOpen] = useState(false);
   const [notifOpen, setNotifOpen] = useState(false);
-  const [notifSeen, setNotifSeen] = useState(false);
-  const pendingApprovals = visibleTeamRequests().filter((r) => r.status === "Pending").length;
-  const pendingRegularizations = visibleTeamRegularizations().filter((r) => r.status === "Pending").length;
+  // Points at the real Employee Profile only when one actually exists —
+  // Super Admin's default sentinel account has no linked Employee record
+  // until "Load Demo Data" links it to EMP001, so it must not 404 (Phase 17).
+  const hasRealProfile = Boolean(getEmployeeByEmployeeId(currentUser.employeeId));
+  const profileHref = hasRealProfile ? `/employees/${currentUser.employeeId}` : "/profile";
+  const securityHref = hasRealProfile ? `/employees/${currentUser.employeeId}?tab=security` : "/profile";
 
   function handleLogout() {
     logout();
@@ -41,32 +58,21 @@ export function Topbar({ title }: { title?: string }) {
 
       <SiteSwitcher />
 
-      <div className="relative max-w-md flex-1">
-        <Search className="pointer-events-none absolute left-3 top-1/2 h-4 w-4 -translate-y-1/2 text-slate-400 dark:text-slate-500" />
-        <input
-          type="text"
-          placeholder="Search anything, my leave..."
-          className="w-full rounded-lg border border-slate-200 bg-slate-50 py-2 pl-9 pr-3 text-sm text-slate-700 placeholder:text-slate-400 focus:border-indigo-500 focus:bg-white focus:outline-none focus:ring-2 focus:ring-indigo-100 dark:border-slate-700 dark:bg-slate-800 dark:text-slate-200 dark:placeholder:text-slate-500 dark:focus:bg-slate-800"
-        />
-      </div>
+      <GlobalSearch />
 
       <div className="ml-auto flex items-center gap-1.5 sm:gap-3">
-        <button className="hidden h-9 w-9 items-center justify-center rounded-lg text-slate-500 hover:bg-slate-50 sm:flex dark:text-slate-400 dark:hover:bg-slate-800">
-          <RefreshCw className="h-4.5 w-4.5" />
-        </button>
         <ThemeToggle />
 
         <div className="relative">
           <button
-            onClick={() => {
-              setNotifOpen((v) => !v);
-              setNotifSeen(true);
-            }}
+            onClick={() => setNotifOpen((v) => !v)}
             className="relative flex h-9 w-9 items-center justify-center rounded-lg text-slate-500 hover:bg-slate-50 dark:text-slate-400 dark:hover:bg-slate-800"
           >
             <Bell className="h-4.5 w-4.5" />
-            {!notifSeen && (
-              <span className="absolute right-2 top-2 h-1.5 w-1.5 rounded-full bg-rose-500" />
+            {unreadCount > 0 && (
+              <span className="absolute right-1.5 top-1.5 flex h-4 min-w-4 items-center justify-center rounded-full bg-rose-500 px-1 text-[10px] font-semibold text-white">
+                {unreadCount > 9 ? "9+" : unreadCount}
+              </span>
             )}
           </button>
 
@@ -74,82 +80,43 @@ export function Topbar({ title }: { title?: string }) {
             <>
               <div className="fixed inset-0 z-10" onClick={() => setNotifOpen(false)} />
               <div className="absolute right-0 z-20 mt-2 w-80 overflow-hidden rounded-xl border border-slate-100 bg-white shadow-lg dark:border-slate-800 dark:bg-slate-900">
-                <div className="border-b border-slate-100 px-4 py-3 dark:border-slate-800">
+                <div className="flex items-center justify-between border-b border-slate-100 px-4 py-3 dark:border-slate-800">
                   <p className="text-sm font-semibold text-slate-800 dark:text-slate-100">Notifications</p>
+                  {unreadCount > 0 && (
+                    <button
+                      onClick={markAllRead}
+                      className="flex items-center gap-1 text-xs font-medium text-indigo-600 hover:underline dark:text-indigo-400"
+                    >
+                      <CheckCheck className="h-3.5 w-3.5" /> Mark all read
+                    </button>
+                  )}
                 </div>
 
-                {pendingApprovals > 0 && (
-                  <Link
-                    href="/leave"
-                    onClick={() => setNotifOpen(false)}
-                    className="flex items-center gap-3 border-b border-slate-100 bg-amber-50/60 px-4 py-3 hover:bg-amber-50 dark:border-slate-800 dark:bg-amber-500/5 dark:hover:bg-amber-500/10"
-                  >
-                    <div className="flex h-8 w-8 shrink-0 items-center justify-center rounded-lg bg-amber-100 text-amber-600 dark:bg-amber-500/15 dark:text-amber-400">
-                      <CalendarOff className="h-4 w-4" />
-                    </div>
-                    <div className="min-w-0">
-                      <p className="text-sm font-medium text-slate-800 dark:text-slate-100">
-                        {pendingApprovals} leave {pendingApprovals === 1 ? "request" : "requests"} awaiting your approval
-                      </p>
-                      <p className="text-xs text-slate-400 dark:text-slate-500">Team Leave</p>
-                    </div>
-                  </Link>
-                )}
-
-                {pendingRegularizations > 0 && (
-                  <Link
-                    href="/attendance"
-                    onClick={() => setNotifOpen(false)}
-                    className="flex items-center gap-3 border-b border-slate-100 bg-amber-50/60 px-4 py-3 hover:bg-amber-50 dark:border-slate-800 dark:bg-amber-500/5 dark:hover:bg-amber-500/10"
-                  >
-                    <div className="flex h-8 w-8 shrink-0 items-center justify-center rounded-lg bg-amber-100 text-amber-600 dark:bg-amber-500/15 dark:text-amber-400">
-                      <CalendarCheck className="h-4 w-4" />
-                    </div>
-                    <div className="min-w-0">
-                      <p className="text-sm font-medium text-slate-800 dark:text-slate-100">
-                        {pendingRegularizations} attendance {pendingRegularizations === 1 ? "regularization" : "regularizations"} awaiting your approval
-                      </p>
-                      <p className="text-xs text-slate-400 dark:text-slate-500">Attendance</p>
-                    </div>
-                  </Link>
-                )}
-
-                {orgAuditEntries.length > 0 && (
-                  <Link
-                    href="/organization/dashboard"
-                    onClick={() => setNotifOpen(false)}
-                    className="flex items-center gap-3 border-b border-slate-100 px-4 py-3 hover:bg-slate-50 dark:border-slate-800 dark:hover:bg-slate-800/60"
-                  >
-                    <div className="flex h-8 w-8 shrink-0 items-center justify-center rounded-lg bg-indigo-100 text-indigo-600 dark:bg-indigo-500/15 dark:text-indigo-400">
-                      <Network className="h-4 w-4" />
-                    </div>
-                    <div className="min-w-0">
-                      <p className="text-sm font-medium text-slate-800 dark:text-slate-100">
-                        {orgAuditEntries[0].orgUnitName} {orgAuditEntries[0].action}
-                      </p>
-                      <p className="text-xs text-slate-400 dark:text-slate-500">
-                        Organization structure &middot; {orgAuditEntries.length} recent change
-                        {orgAuditEntries.length === 1 ? "" : "s"}
-                      </p>
-                    </div>
-                  </Link>
-                )}
-
-                <div className="max-h-72 overflow-y-auto">
-                  {recentActivities.slice(0, 5).map((activity) => (
-                    <div
-                      key={activity.id}
-                      className="flex items-start gap-3 px-4 py-3 hover:bg-slate-50 dark:hover:bg-slate-800/60"
+                <div className="max-h-96 overflow-y-auto">
+                  {myNotifications.slice(0, 20).map((n) => (
+                    <Link
+                      key={n.id}
+                      href={n.href ?? "#"}
+                      onClick={() => {
+                        markRead(n.id);
+                        setNotifOpen(false);
+                      }}
+                      className={`flex items-start gap-3 border-b border-slate-100 px-4 py-3 hover:bg-slate-50 dark:border-slate-800 dark:hover:bg-slate-800/60 ${!n.read ? "bg-indigo-50/40 dark:bg-indigo-500/5" : ""}`}
                     >
-                      <Avatar name={activity.name} size="sm" />
-                      <div className="min-w-0 flex-1">
-                        <p className="text-sm text-slate-700 dark:text-slate-200">
-                          <span className="font-medium">{activity.name}</span> {activity.action}
-                        </p>
-                        <p className="mt-0.5 text-xs text-slate-400 dark:text-slate-500">{activity.time}</p>
+                      <div className={`flex h-8 w-8 shrink-0 items-center justify-center rounded-lg ${notifTone(n.type)}`}>
+                        <Bell className="h-4 w-4" />
                       </div>
-                    </div>
+                      <div className="min-w-0 flex-1">
+                        <p className="text-sm font-medium text-slate-800 dark:text-slate-100">{n.title}</p>
+                        <p className="mt-0.5 truncate text-xs text-slate-500 dark:text-slate-400">{n.message}</p>
+                        <p className="mt-0.5 text-xs text-slate-400 dark:text-slate-500">{notifTimeAgo(n.createdAt)}</p>
+                      </div>
+                      {!n.read && <span className="mt-1.5 h-1.5 w-1.5 shrink-0 rounded-full bg-indigo-500" />}
+                    </Link>
                   ))}
+                  {myNotifications.length === 0 && (
+                    <p className="px-4 py-8 text-center text-sm text-slate-400 dark:text-slate-500">No notifications yet.</p>
+                  )}
                 </div>
               </div>
             </>
@@ -178,13 +145,13 @@ export function Topbar({ title }: { title?: string }) {
               <div className="fixed inset-0 z-10" onClick={() => setOpen(false)} />
               <div className="absolute right-0 z-20 mt-2 w-48 overflow-hidden rounded-xl border border-slate-100 bg-white py-1 shadow-lg dark:border-slate-800 dark:bg-slate-900">
                 <Link
-                  href={`/employees/${currentUser.employeeId}`}
+                  href={profileHref}
                   className="flex items-center gap-2 px-3.5 py-2.5 text-sm text-slate-600 hover:bg-slate-50 dark:text-slate-300 dark:hover:bg-slate-800"
                 >
                   <UserRound className="h-4 w-4" /> My Profile
                 </Link>
                 <Link
-                  href={`/employees/${currentUser.employeeId}?tab=security`}
+                  href={securityHref}
                   className="flex items-center gap-2 px-3.5 py-2.5 text-sm text-slate-600 hover:bg-slate-50 dark:text-slate-300 dark:hover:bg-slate-800"
                 >
                   <ShieldCheck className="h-4 w-4" /> Security

@@ -12,7 +12,8 @@ import { StatusBadge } from "@/components/ui/status-badge";
 import { StatCard } from "@/components/ui/stat-card";
 import { Can } from "@/components/auth/permission-gate";
 import { EmptyRow, TBody, TableFootnote, Td, Th, THead, Table, Tr } from "@/components/ui/table";
-import { departments, employees } from "@/lib/mock-data";
+import { departments } from "@/lib/mock-data";
+import { useEmployees } from "@/lib/employee-context";
 import { useOnboarding } from "@/lib/onboarding-context";
 import { useSite, useSiteFilter } from "@/lib/site-context";
 import { useToast } from "@/lib/toast-context";
@@ -30,6 +31,7 @@ function ProgressBar({ value }: { value: number }) {
 
 export default function OnboardingPage() {
   const { sites, isAllSites, currentSite } = useSite();
+  const { employees } = useEmployees();
   const toast = useToast();
   const { visibleCases, progressFor, createCase } = useOnboarding();
   const [modalOpen, setModalOpen] = useState(false);

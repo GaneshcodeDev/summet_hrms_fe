@@ -16,9 +16,12 @@ import type {
   LeaveAuditEntry,
   LeaveRequest,
   OrgUnit,
+  PerformanceCycle,
+  PerformanceReviewCase,
   SeparationCase,
 } from "@/lib/types";
 import { summarizeAttendance } from "@/lib/attendance-context";
+import { isProbationDueSoon, isProbationOverdue } from "@/lib/lifecycle-engine";
 
 export function getSiteEmployeeStats(employees: Employee[]) {
   return {
@@ -161,6 +164,17 @@ export function getRecentActivity(
     .slice(0, limit);
 }
 
+/** Employees still on Probation, split into "due for confirmation soon" (probation end within 30 days, not yet passed) vs. "overdue" (end date already passed but never confirmed). */
+export function getProbationSummary(employees: Employee[], withinDays = 30) {
+  const onProbation = employees.filter((e) => e.employmentStage === "Probation" && e.dateOfJoining && e.probationPeriodMonths);
+  const today = new Date().toISOString().slice(0, 10);
+  return {
+    onProbation: onProbation.length,
+    dueForConfirmationSoon: onProbation.filter((e) => isProbationDueSoon(e.dateOfJoining, e.probationPeriodMonths!, today, withinDays)).length,
+    overdue: onProbation.filter((e) => isProbationOverdue(e.dateOfJoining, e.probationPeriodMonths!, today)).length,
+  };
+}
+
 export function getExitSummary(cases: SeparationCase[]) {
   const today = new Date().toISOString().slice(0, 10);
   const in30 = (d: string) => {
@@ -176,4 +190,45 @@ export function getExitSummary(cases: SeparationCase[]) {
     upcomingExits: cases.filter((c) => openSeparationStatuses.includes(c.status) && in30(c.lastWorkingDay)).length,
     recentlyExited: cases.filter((c) => c.status === "Completed" && withinLast30(c.lastWorkingDay)).length,
   };
+}
+
+/** Reused by both the Performance page's "Team" summary card and the Manager dashboard view — pass only this manager's direct-report cases. */
+export function getTeamReviewSummary(teamCases: PerformanceReviewCase[]) {
+  const total = teamCases.length;
+  const completed = teamCases.filter((c) => c.stage === "Completed").length;
+  const pendingSelfReview = teamCases.filter((c) => c.stage === "Goals Assigned").length;
+  const awaitingManagerReview = teamCases.filter((c) => c.stage === "Self Review").length;
+  return {
+    total,
+    completed,
+    pendingReviews: total - completed,
+    pendingSelfReview,
+    awaitingManagerReview,
+    completionPct: total ? Math.round((completed / total) * 100) : 0,
+  };
+}
+
+/** Site-scoped cycle completion — pass every case belonging to cycles at this site (HR/Admin dashboard). */
+export function getCycleCompletionSummary(siteCases: PerformanceReviewCase[]) {
+  const total = siteCases.length;
+  const completed = siteCases.filter((c) => c.stage === "Completed").length;
+  const awaitingHRReview = siteCases.filter((c) => c.stage === "HR Review").length;
+  return {
+    total,
+    completed,
+    pendingReviews: total - completed,
+    employeesAwaitingReview: total - completed,
+    awaitingHRReview,
+    completionPct: total ? Math.round((completed / total) * 100) : 0,
+  };
+}
+
+/** The employee's own most relevant cycle right now — the one still open (not Completed) if there is one, else their most recently completed. */
+export function currentCycleCaseFor(employeeId: string, cycles: PerformanceCycle[], cases: PerformanceReviewCase[]) {
+  const mine = cases.filter((c) => c.employeeId === employeeId);
+  const cycleDates: Record<string, string> = Object.fromEntries(cycles.map((c) => [c.id, c.startDate]));
+  const open = mine.filter((c) => c.stage !== "Completed").sort((a, b) => (cycleDates[b.cycleId] ?? "").localeCompare(cycleDates[a.cycleId] ?? ""));
+  if (open.length > 0) return open[0];
+  const completed = mine.slice().sort((a, b) => (cycleDates[b.cycleId] ?? "").localeCompare(cycleDates[a.cycleId] ?? ""));
+  return completed[0];
 }

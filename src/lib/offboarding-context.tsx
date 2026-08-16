@@ -4,6 +4,7 @@ import {
   createContext,
   useCallback,
   useContext,
+  useEffect,
   useMemo,
   useSyncExternalStore,
   type ReactNode,
@@ -12,10 +13,15 @@ import { logOffboardingAudit, offboardingAuditStore, separationCasesStore } from
 import { buildClearanceItems } from "@/lib/offboarding-data";
 import { leaveBalancesStore } from "@/lib/leave-store";
 import { employeeLoansStore } from "@/lib/payroll-store";
-import { employees } from "@/lib/mock-data";
+import { employeesStore } from "@/lib/employee-store";
 import { useAccessControl } from "@/lib/access-control-context";
+import { useEmployees } from "@/lib/employee-context";
+import { usePayroll } from "@/lib/payroll-context";
+import { useApprovals } from "@/lib/approval-context";
+import { logLifecycleEvent } from "@/lib/lifecycle-store";
 import type {
   ClearanceItemStatus,
+  Employee,
   ExitInterview,
   FnFLineItem,
   LetterStatus,
@@ -24,10 +30,6 @@ import type {
   SeparationStatus,
   SeparationType,
 } from "@/lib/types";
-
-/** Illustrative flat per-day encashment rate used for the demo F&F calculation (no real payroll engine). */
-const ENCASHMENT_DAILY_RATE = 2500;
-const PENDING_SALARY_ESTIMATE = 15000;
 
 interface ActionResult {
   ok: boolean;
@@ -72,8 +74,20 @@ function allCleared(c: SeparationCase) {
   return c.clearanceItems.every((i) => i.status === "Cleared");
 }
 
+/** Direct store write, bypassing useEmployees()'s own edit-gate — this is a
+ * system-derived side effect of an ALREADY-authorized offboarding action
+ * (gated by canManage/offboarding.cases below), not a separate user edit, so
+ * it shouldn't additionally require employees.directory:edit (a Payroll
+ * Admin who can legitimately run F&F settlement may not hold that grant). */
+function setEmployeeLifecycleFields(employee: Employee, patch: Partial<Pick<Employee, "employmentStage" | "status">>) {
+  employeesStore.set(employeesStore.getSnapshot().map((e) => (e.id === employee.id ? { ...e, ...patch } : e)));
+}
+
 export function OffboardingProvider({ children }: { children: ReactNode }) {
   const { currentUser, canFeature } = useAccessControl();
+  const { employees } = useEmployees();
+  const { salaryStructureFor } = usePayroll();
+  const { recordMirroredAction } = useApprovals();
 
   const cases = useSyncExternalStore(
     separationCasesStore.subscribe,
@@ -95,7 +109,7 @@ export function OffboardingProvider({ children }: { children: ReactNode }) {
       employees.filter((e) => e.reportingManagerId === currentUser.employeeId).map((e) => e.employeeId),
     );
     return cases.filter((c) => c.employeeId === currentUser.employeeId || directReportIds.has(c.employeeId));
-  }, [cases, canManage, currentUser.employeeId]);
+  }, [cases, canManage, currentUser.employeeId, employees]);
 
   const caseById = useCallback((id: string) => cases.find((c) => c.id === id), [cases]);
   const auditFor = useCallback((caseId: string) => auditEntries.filter((e) => e.caseId === caseId), [auditEntries]);
@@ -151,7 +165,7 @@ export function OffboardingProvider({ children }: { children: ReactNode }) {
       });
       return { ok: true, message: `${input.type} submitted for ${employee.name}.` };
     },
-    [canCreate, canManage, currentUser.employeeId, currentUser.name],
+    [canCreate, canManage, currentUser.employeeId, currentUser.name, employees],
   );
 
   const approveSeparation = useCallback(
@@ -163,9 +177,40 @@ export function OffboardingProvider({ children }: { children: ReactNode }) {
 
       mutateCase(id, (c) => ({ ...c, status: "Approved", approverId: currentUser.employeeId, approverName: currentUser.name, decidedOn: new Date().toISOString().slice(0, 10) }));
       logOffboardingAudit({ caseId: id, employeeName: record.employee, action: "approved", actorName: currentUser.name, detail: `${record.type} approved` });
+
+      // Confirmed -> Notice happens here, at approval — never at initiation,
+      // so an employee stays fully Confirmed while their request is only
+      // Pending (Phase 12 section 16). EmployeeStatus is untouched — it
+      // stays Active until the actual exit (see the reconciliation effect
+      // and completeOffboarding below).
+      const employee = employees.find((e) => e.employeeId === record.employeeId);
+      const previousStage = employee?.employmentStage;
+      if (employee) {
+        setEmployeeLifecycleFields(employee, { employmentStage: "On Notice" });
+        logLifecycleEvent({
+          employeeId: employee.employeeId,
+          siteId: employee.siteId,
+          eventType: "Notice Started",
+          previousValue: previousStage,
+          newValue: "On Notice",
+          actorName: currentUser.name,
+          date: new Date().toISOString().slice(0, 10),
+          comment: `Last working day ${record.lastWorkingDay}`,
+        });
+      }
+      recordMirroredAction({
+        siteId: record.siteId ?? currentUser.siteId,
+        module: "Offboarding",
+        recordId: id,
+        recordOwnerEmployeeId: record.employeeId,
+        recordOwnerName: record.employee,
+        approverType: "HR",
+        action: "APPROVE",
+        newStatus: "Approved",
+      });
       return { ok: true, message: `Approved ${record.employee}'s ${record.type.toLowerCase()}.` };
     },
-    [canManage, currentUser.employeeId, currentUser.name, mutateCase],
+    [canManage, currentUser.employeeId, currentUser.name, currentUser.siteId, mutateCase, employees, recordMirroredAction],
   );
 
   const rejectSeparation = useCallback(
@@ -185,9 +230,20 @@ export function OffboardingProvider({ children }: { children: ReactNode }) {
         decidedOn: new Date().toISOString().slice(0, 10),
       }));
       logOffboardingAudit({ caseId: id, employeeName: record.employee, action: "rejected", actorName: currentUser.name, detail: `${record.type} rejected — ${reason.trim()}` });
+      recordMirroredAction({
+        siteId: record.siteId ?? currentUser.siteId,
+        module: "Offboarding",
+        recordId: id,
+        recordOwnerEmployeeId: record.employeeId,
+        recordOwnerName: record.employee,
+        approverType: "HR",
+        action: "REJECT",
+        newStatus: "Rejected",
+        comment: reason.trim(),
+      });
       return { ok: true, message: `Rejected ${record.employee}'s ${record.type.toLowerCase()}.` };
     },
-    [canManage, currentUser.employeeId, currentUser.name, mutateCase],
+    [canManage, currentUser.employeeId, currentUser.name, currentUser.siteId, mutateCase, recordMirroredAction],
   );
 
   const withdrawResignation = useCallback(
@@ -271,15 +327,33 @@ export function OffboardingProvider({ children }: { children: ReactNode }) {
       const encashableDays = leaveBalance ? Math.max(leaveBalance.total - leaveBalance.used, 0) : 0;
       const activeLoans = employeeLoansStore.getSnapshot().filter((l) => l.employeeId === record.employeeId && l.status === "Active");
 
+      // Derived from the employee's own finalized salary structure — never a
+      // flat estimate (Phase 12 section 20). A simple gross/30 per-day rate,
+      // not a statutory formula, exactly as the spec allows ("do not invent
+      // legal settlement rules" — this is the same day-rate convention
+      // Payroll's own LOP deduction already uses elsewhere in this app).
+      const structure = salaryStructureFor(record.employeeId);
+      const dailyRate = structure ? structure.grossMonthly / 30 : 0;
+      const daysElapsedInFinalMonth = Number(record.lastWorkingDay.slice(8, 10)) || 0;
+      const pendingSalaryAmount = Math.round(dailyRate * daysElapsedInFinalMonth);
+
       const lineItems: FnFLineItem[] = [
-        { id: `fnf-${Date.now()}-1`, label: "Pending Salary (partial month)", type: "Earning", amount: PENDING_SALARY_ESTIMATE, autoComputed: true },
+        {
+          id: `fnf-${Date.now()}-1`,
+          label: structure
+            ? `Pending Salary (${daysElapsedInFinalMonth} day(s) @ ₹${Math.round(dailyRate).toLocaleString("en-IN")}/day)`
+            : "Pending Salary (no salary structure on file — ₹0)",
+          type: "Earning",
+          amount: pendingSalaryAmount,
+          autoComputed: true,
+        },
       ];
       if (encashableDays > 0) {
         lineItems.push({
           id: `fnf-${Date.now()}-2`,
-          label: `Leave Encashment (${encashableDays} day${encashableDays === 1 ? "" : "s"} @ ₹${ENCASHMENT_DAILY_RATE}/day)`,
+          label: `Leave Encashment (${encashableDays} day${encashableDays === 1 ? "" : "s"} @ ₹${Math.round(dailyRate).toLocaleString("en-IN")}/day)`,
           type: "Earning",
-          amount: encashableDays * ENCASHMENT_DAILY_RATE,
+          amount: Math.round(encashableDays * dailyRate),
           autoComputed: true,
         });
       }
@@ -302,7 +376,7 @@ export function OffboardingProvider({ children }: { children: ReactNode }) {
       logOffboardingAudit({ caseId, employeeName: record.employee, action: "settlement_computed", actorName: currentUser.name, detail: `F&F settlement computed — net payable ₹${netPayable.toLocaleString("en-IN")}` });
       return { ok: true, message: `Settlement computed — net payable ₹${netPayable.toLocaleString("en-IN")}.` };
     },
-    [canManage, currentUser.name, mutateCase],
+    [canManage, currentUser.name, mutateCase, salaryStructureFor],
   );
 
   const addSettlementLineItem = useCallback(
@@ -372,10 +446,71 @@ export function OffboardingProvider({ children }: { children: ReactNode }) {
 
       mutateCase(caseId, (c) => ({ ...c, status: "Completed", completedOn: new Date().toISOString().slice(0, 10) }));
       logOffboardingAudit({ caseId, employeeName: record.employee, action: "completed", actorName: currentUser.name, detail: "Offboarding completed" });
+
+      // Notice -> Exited, Active -> Inactive — the case being fully cleared
+      // and paid is itself a legitimate trigger even if this lands before
+      // the actual lastWorkingDay reconciliation below would have fired.
+      const employee = employees.find((e) => e.employeeId === record.employeeId);
+      if (employee && employee.employmentStage !== "Exited") {
+        setEmployeeLifecycleFields(employee, { employmentStage: "Exited", status: "Inactive" });
+        logLifecycleEvent({
+          employeeId: employee.employeeId,
+          siteId: employee.siteId,
+          eventType: "Exit Completed",
+          previousValue: employee.employmentStage,
+          newValue: "Exited",
+          actorName: currentUser.name,
+          date: new Date().toISOString().slice(0, 10),
+          comment: `Last working day ${record.lastWorkingDay}`,
+        });
+      }
+      recordMirroredAction({
+        siteId: record.siteId ?? currentUser.siteId,
+        module: "Offboarding",
+        recordId: caseId,
+        recordOwnerEmployeeId: record.employeeId,
+        recordOwnerName: record.employee,
+        approverType: "HR",
+        action: "APPROVE",
+        newStatus: "Approved",
+        stepOrder: 1,
+        advanceToNextStep: true,
+        comment: "Offboarding completed",
+      });
       return { ok: true, message: `Offboarding completed for ${record.employee}.` };
     },
-    [canManage, currentUser.name, mutateCase],
+    [canManage, currentUser.name, currentUser.siteId, mutateCase, employees, recordMirroredAction],
   );
+
+  // "On the effective exit date" (Phase 12 section 16) — there's no
+  // background scheduler in this app (everything is user-action-driven), so
+  // this is the client-side reconciliation that plays the same role: any
+  // time this provider is mounted/updated, an already-Approved case whose
+  // lastWorkingDay has passed flips its employee to Exited/Inactive even if
+  // clearance/settlement paperwork (and completeOffboarding) hasn't caught
+  // up yet. Idempotent — skips employees already marked Exited — and never
+  // touches the SeparationCase's own status, which still only advances
+  // through the real clearance/settlement gates above.
+  useEffect(() => {
+    const today = new Date().toISOString().slice(0, 10);
+    const dueCases = cases.filter((c) => (c.status === "Approved" || c.status === "Clearance In Progress" || c.status === "Settlement Pending") && c.lastWorkingDay <= today);
+    for (const c of dueCases) {
+      const employee = employees.find((e) => e.employeeId === c.employeeId);
+      if (!employee || employee.employmentStage === "Exited") continue;
+      setEmployeeLifecycleFields(employee, { employmentStage: "Exited", status: "Inactive" });
+      logLifecycleEvent({
+        employeeId: employee.employeeId,
+        siteId: employee.siteId,
+        eventType: "Exit Completed",
+        previousValue: employee.employmentStage,
+        newValue: "Exited",
+        actorName: "System",
+        date: c.lastWorkingDay,
+        comment: `Automatic — last working day ${c.lastWorkingDay} reached`,
+      });
+    }
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [cases, employees]);
 
   const value = useMemo<OffboardingContextValue>(
     () => ({

@@ -121,6 +121,40 @@ export interface Employee {
 }
 
 /* ------------------------------------------------------------------ */
+/* Employee lifecycle history — one reusable event log for every        */
+/* post-hire change (Confirmed/Promoted/Transferred/Manager Changed/    */
+/* Shift Changed/Salary Revised/Notice Started/Exit Completed/...).     */
+/* Every writer (employee-lifecycle-context.tsx, offboarding-context.tsx,*/
+/* recruitment-context.tsx's Hired transition) logs into this ONE store  */
+/* via logLifecycleEvent — never a per-feature history table.           */
+/* ------------------------------------------------------------------ */
+
+export type LifecycleEventType =
+  | "Joined"
+  | "Confirmed"
+  | "Promoted"
+  | "Transferred"
+  | "Department Changed"
+  | "Site Changed"
+  | "Manager Changed"
+  | "Shift Changed"
+  | "Salary Revised"
+  | "Notice Started"
+  | "Exit Completed";
+
+export interface EmployeeLifecycleEvent {
+  id: string;
+  employeeId: string;
+  siteId: string;
+  eventType: LifecycleEventType;
+  previousValue?: string;
+  newValue?: string;
+  actorName: string;
+  date: string;
+  comment?: string;
+}
+
+/* ------------------------------------------------------------------ */
 /* Employee bank details — one record per employee, real store-backed  */
 /* (not the old shared mock helper). Sensitive: gated by payroll.bank. */
 /* ------------------------------------------------------------------ */
@@ -472,6 +506,12 @@ export const masterTypes = [
   "Country",
   "State",
   "City",
+  "GoalCategory",
+  "PerformanceRating",
+  "SkillLevel",
+  "TrainingCategory",
+  "AssetType",
+  "ExpenseCategory",
 ] as const;
 
 export type MasterType = (typeof masterTypes)[number];
@@ -677,6 +717,15 @@ export interface EmployeeSalaryStructure {
   id: string;
   employeeId: string;
   siteId: string;
+  /**
+   * The date this specific version takes effect — the real versioning key.
+   * Multiple EmployeeSalaryStructure records may exist per employeeId, one
+   * per revision; payroll processing for month X picks the entry with the
+   * latest effectiveFrom that is still <= month X (see
+   * payroll-engine.ts's selectSalaryStructureForMonth), so a revision saved
+   * today with a future effectiveFrom never touches payroll already run for
+   * earlier months.
+   */
   effectiveFrom: string;
   ctcAnnual: number;
   /** Monthly recurring earnings (Basic, HRA, allowances) — LOP/overtime are computed per payroll run, not stored here. */
@@ -686,6 +735,8 @@ export interface EmployeeSalaryStructure {
   grossMonthly: number;
   updatedOn: string;
   updatedBy?: string;
+  /** Why this revision was made (e.g. "Annual increment", "Promotion") — optional, shown in Salary History. */
+  reason?: string;
 }
 
 export type PayrollRunStatus = "Processing" | "Approved" | "Locked";
@@ -774,34 +825,655 @@ export interface TaxDeclaration {
   decisionReason?: string;
 }
 
-export type JobStatus = "Active" | "Closed" | "On Hold";
+/* ------------------------------------------------------------------ */
+/* Recruitment — Manpower Requirement -> Requisition -> Approval ->    */
+/* Job Opening -> Candidate -> Application -> Screening -> Interview ->*/
+/* Selection -> Offer -> Offer Accepted -> Onboarding -> Employee.     */
+/* Requisitions/Openings/Offers use OrgUnit/Masters FK ids (never a    */
+/* second department/designation text field) — see report-selectors.ts*/
+/* buildReportEmployeeRows for the identical id->name resolution       */
+/* pattern this module follows. Requisition approval reuses the Phase  */
+/* 9 Approval Engine (see approvalModules below) — no separate gate.   */
+/* ------------------------------------------------------------------ */
+
+export type RequisitionPriority = "Low" | "Medium" | "High" | "Urgent";
+export type RequisitionStatus = "Draft" | "Pending Approval" | "Approved" | "Rejected" | "Cancelled" | "Closed";
+
+export interface JobRequisition {
+  id: string;
+  siteId: string;
+  departmentId?: string;
+  subDepartmentId?: string;
+  designationId?: string;
+  gradeId?: string;
+  employmentTypeId?: string;
+  employeeTypeId?: string;
+  positions: number;
+  hiringManagerId?: string;
+  requiredSkills?: string[];
+  minExperienceYears?: number;
+  maxExperienceYears?: number;
+  salaryRangeMin?: number;
+  salaryRangeMax?: number;
+  priority: RequisitionPriority;
+  targetJoiningDate?: string;
+  reasonForHiring: string;
+  status: RequisitionStatus;
+  requestedBy: string;
+  requestedByName: string;
+  createdOn: string;
+}
+
+export type JobOpeningStatus = "Draft" | "Open" | "On Hold" | "Closed" | "Cancelled";
 
 export interface JobOpening {
   id: string;
-  title: string;
-  department: string;
-  location: string;
-  applicants: number;
-  status: JobStatus;
+  requisitionId?: string;
   siteId: string;
+  departmentId?: string;
+  designationId?: string;
+  employmentTypeId?: string;
+  title: string;
+  description?: string;
+  requiredSkills?: string[];
+  minExperienceYears?: number;
+  maxExperienceYears?: number;
+  salaryRangeMin?: number;
+  salaryRangeMax?: number;
+  location: string;
+  openings: number;
+  status: JobOpeningStatus;
+  openDate: string;
+  closeDate?: string;
+  createdBy: string;
+  createdOn: string;
+}
+
+export interface Candidate {
+  id: string;
+  firstName: string;
+  lastName: string;
+  email: string;
+  phone: string;
+  alternatePhone?: string;
+  dateOfBirth?: string;
+  location?: string;
+  currentCompany?: string;
+  currentDesignation?: string;
+  totalExperienceYears?: number;
+  relevantExperienceYears?: number;
+  currentSalary?: number;
+  expectedSalary?: number;
+  noticePeriodDays?: number;
+  skills?: string[];
+  resumeFileName?: string;
+  /** RecruitmentSource master id. */
+  sourceId?: string;
+  /** Originating site — a candidate can still apply to openings at other sites; each Application carries its own siteId for isolation. */
+  siteId: string;
+  createdOn: string;
+  createdBy: string;
+}
+
+export type ApplicationStage =
+  | "Applied"
+  | "Screening"
+  | "Interview"
+  | "Selected"
+  | "Offer"
+  | "Offer Accepted"
+  | "Hired"
+  | "Rejected"
+  | "Withdrawn";
+
+export interface Application {
+  id: string;
+  candidateId: string;
+  jobOpeningId: string;
+  siteId: string;
+  appliedDate: string;
+  sourceId?: string;
+  recruiterId?: string;
+  stage: ApplicationStage;
+  rejectedBy?: string;
+  rejectedOn?: string;
+  rejectionReason?: string;
+  withdrawnOn?: string;
+  withdrawnReason?: string;
+}
+
+export type InterviewMode = "In-Person" | "Video" | "Phone";
+export type InterviewStatus = "Scheduled" | "Completed" | "Cancelled" | "No-Show";
+export type InterviewRecommendation = "Strong Hire" | "Hire" | "No Hire" | "Strong No Hire";
+
+export interface InterviewFeedback {
+  technicalSkills?: number;
+  communication?: number;
+  problemSolving?: number;
+  cultureFit?: number;
+  overallRating?: number;
+  recommendation?: InterviewRecommendation;
+  comments?: string;
+  submittedBy?: string;
+  submittedOn?: string;
+}
+
+export interface Interview {
+  id: string;
+  applicationId: string;
+  candidateId: string;
+  siteId: string;
+  round: number;
+  roundLabel: string;
+  interviewerIds: string[];
+  scheduledDate: string;
+  scheduledTime: string;
+  mode: InterviewMode;
+  locationOrLink?: string;
+  status: InterviewStatus;
+  feedback?: InterviewFeedback;
+  createdOn: string;
+}
+
+export type OfferStatus = "Draft" | "Sent" | "Accepted" | "Rejected" | "Expired" | "Withdrawn";
+
+export interface Offer {
+  id: string;
+  applicationId: string;
+  candidateId: string;
+  siteId: string;
+  designationId?: string;
+  departmentId?: string;
+  employmentTypeId?: string;
+  joiningDate: string;
+  ctcAnnual: number;
+  /** Reuses Payroll's SalaryLine shape — carried into EmployeeSalaryStructure as-is on hire, never a parallel salary model. */
+  earnings: SalaryLine[];
+  deductions: SalaryLine[];
+  probationPeriodMonths?: number;
+  offerDate: string;
+  expiryDate?: string;
+  status: OfferStatus;
+  createdBy: string;
+  createdOn: string;
+  decidedOn?: string;
+  decisionReason?: string;
+}
+
+export type RecruitmentRecordType = "Requisition" | "Opening" | "Candidate" | "Application" | "Interview" | "Offer";
+export type RecruitmentAuditAction =
+  | "requisition_created"
+  | "requisition_approved"
+  | "requisition_rejected"
+  | "requisition_cancelled"
+  | "opening_created"
+  | "opening_status_changed"
+  | "candidate_created"
+  | "application_created"
+  | "stage_changed"
+  | "interview_scheduled"
+  | "interview_feedback_submitted"
+  | "offer_created"
+  | "offer_sent"
+  | "offer_accepted"
+  | "offer_rejected"
+  | "offer_expired"
+  | "offer_withdrawn"
+  | "onboarding_started";
+
+export interface RecruitmentAuditEntry {
+  id: string;
+  recordType: RecruitmentRecordType;
+  recordId: string;
+  siteId: string;
+  action: RecruitmentAuditAction;
+  actorName: string;
+  detail: string;
+  timestamp: string;
 }
 
 export type ReviewStatus = "Completed" | "In Progress" | "Pending";
 
-export interface PerformanceReview {
+/* ------------------------------------------------------------------ */
+/* Performance Management, Goals & Appraisal (Phase 13)                */
+/* Reuses: Employee/Org/Site/RBAC/Approval Engine/Employee Lifecycle/   */
+/* Payroll Salary Structure — see performance-context.tsx.              */
+/* ------------------------------------------------------------------ */
+
+/**
+ * Mirrors the app's existing Title Case status convention (SeparationCase,
+ * ApprovalInstanceStatus, OnboardingCase, ...) rather than introducing a new
+ * SCREAMING_SNAKE_CASE style. One status per cycle, gating which stage's
+ * actions are globally open; an individual PerformanceReviewCase can lag
+ * behind (e.g. still "Self Review" while the cycle has moved to "HR Review")
+ * but can never skip ahead of it — see performance-engine.ts.
+ */
+export const performanceCycleStatuses = ["Draft", "Open", "Self Review", "Manager Review", "HR Review", "Completed", "Closed"] as const;
+export type PerformanceCycleStatus = (typeof performanceCycleStatuses)[number];
+
+export interface PerformanceCycle {
   id: string;
-  employee: string;
-  period: string;
-  status: ReviewStatus;
-  rating?: number;
   siteId: string;
+  name: string;
+  startDate: string;
+  endDate: string;
+  reviewStartDate: string;
+  reviewEndDate: string;
+  status: PerformanceCycleStatus;
+  /** Whether this cycle's reviews route through an HR Review stage before Completed, or finalize straight from Manager Review — section 10/15. */
+  requiresHRReview: boolean;
+  createdBy: string;
+  createdOn: string;
 }
 
-export interface Activity {
+export type GoalScope = "Individual" | "Department" | "Team" | "Organization";
+export type GoalStatus = "Not Started" | "In Progress" | "Completed" | "Missed";
+
+export interface PerformanceGoal {
   id: string;
+  /** Canonical link to Employee.employeeId — never trust a display name for authorization (Phase 12 convention). */
+  employeeId: string;
+  siteId: string;
+  cycleId: string;
+  scope: GoalScope;
+  title: string;
+  description?: string;
+  /** References a "GoalCategory" Master record — configurable, not hardcoded (section 4). */
+  categoryId?: string;
+  kpi: string;
+  target: string;
+  measurement: string;
+  /** Percentage weight within the employee's goal set for this cycle — validated to sum to 100 (section 5). */
+  weight: number;
+  dueDate: string;
+  status: GoalStatus;
+  /** Employee-reported progress against the target, 0-100. */
+  achievement: number;
+  employeeComment?: string;
+  managerComment?: string;
+  /** 1..5 (or whatever range the "PerformanceRating" Master is configured with) — set during Manager Review, section 9. */
+  managerRating?: number;
+  createdBy: string;
+  createdOn: string;
+}
+
+export type PerformanceReviewStage = "Draft" | "Goals Assigned" | "Self Review" | "Manager Review" | "HR Review" | "Completed";
+
+/** One employee's review within one cycle — the case-level record goals roll up into. */
+export interface PerformanceReviewCase {
+  id: string;
+  employeeId: string;
+  siteId: string;
+  cycleId: string;
+  stage: PerformanceReviewStage;
+  selfReviewSubmittedOn?: string;
+  managerReviewSubmittedOn?: string;
+  managerReviewedBy?: string;
+  hrReviewSubmittedOn?: string;
+  hrReviewedBy?: string;
+  hrComment?: string;
+  /** Weighted average of each goal's managerRating (performance-engine.ts) — null until Manager Review is submitted. */
+  finalScore?: number;
+  completedOn?: string;
+}
+
+export type AppraisalStatus = "Draft" | "Pending Approval" | "Approved" | "Rejected" | "Applied";
+
+export interface AppraisalDecision {
+  id: string;
+  employeeId: string;
+  siteId: string;
+  cycleId: string;
+  reviewCaseId: string;
+  finalRating: number;
+  previousCtcAnnual?: number;
+  proposedCtcAnnual?: number;
+  incrementPercent: number;
+  proposedDesignationId?: string;
+  proposedGradeId?: string;
+  promotion: boolean;
+  effectiveDate: string;
+  comments?: string;
+  status: AppraisalStatus;
+  createdBy: string;
+  createdOn: string;
+  decidedBy?: string;
+  decidedOn?: string;
+  appliedOn?: string;
+}
+
+export type PerformanceAuditAction =
+  | "cycle_created"
+  | "cycle_status_changed"
+  | "goals_assigned"
+  | "self_review_submitted"
+  | "manager_review_submitted"
+  | "hr_review_submitted"
+  | "appraisal_created"
+  | "appraisal_decided"
+  | "appraisal_applied";
+
+export interface PerformanceAuditEntry {
+  id: string;
+  action: PerformanceAuditAction;
+  employeeId?: string;
+  cycleId?: string;
+  actorName: string;
+  detail: string;
+  timestamp: string;
+}
+
+/* ------------------------------------------------------------------ */
+/* Skills & Training, Learning Management (Phase 14)                    */
+/* Reuses: Employee/Site/Organization/Masters/Performance/RBAC/Approval */
+/* Engine — see skills-context.tsx / training-context.tsx.              */
+/* Employee.skills (plain string[], Phase 7) is untouched — this is a   */
+/* parallel, richer model, not a replacement.                           */
+/* ------------------------------------------------------------------ */
+
+export type SkillSource = "Self-Reported" | "Manager Assessed" | "HR Assessed" | "Training Completion";
+
+/**
+ * Append-only, exactly like EmployeeSalaryStructure (Phase 12): "current"
+ * level is always the latest record for an employeeId+skillId pair, and
+ * every prior record stays on file untouched — see selectCurrentSkill /
+ * skill-engine.ts. A single "assess a skill" action IS what creates a new
+ * version; there's no separate SkillAssessment entity duplicating the same
+ * fields (section 18's Skill Assessment and section 19's Skill History are
+ * both just reads over this one versioned list).
+ */
+export interface EmployeeSkill {
+  id: string;
+  employeeId: string;
+  siteId: string;
+  /** "Skill" Master record id. */
+  skillId: string;
+  /** "SkillLevel" Master record id — its `value` attribute is the ordinal used for gap math. */
+  skillLevelId: string;
+  yearsOfExperience?: number;
+  lastAssessedDate: string;
+  source: SkillSource;
+  assessedBy: string;
+  comment?: string;
+  createdOn: string;
+}
+
+export type SkillUpdateProposalStatus = "Pending" | "Approved" | "Rejected";
+
+/**
+ * A training-completion-triggered skill bump is never applied silently
+ * (section 17) — it lands here first, and only decideSkillUpdateProposal
+ * (HR/manager) actually appends the new EmployeeSkill version.
+ */
+export interface SkillUpdateProposal {
+  id: string;
+  employeeId: string;
+  siteId: string;
+  skillId: string;
+  currentSkillLevelId?: string;
+  proposedSkillLevelId: string;
+  sourceEnrollmentId: string;
+  reason: string;
+  status: SkillUpdateProposalStatus;
+  createdOn: string;
+  decidedBy?: string;
+  decidedOn?: string;
+}
+
+export type TrainingMode = "Classroom" | "Online" | "Hybrid" | "On-the-job";
+
+export const trainingProgramStatuses = ["Draft", "Published", "In Progress", "Completed", "Cancelled"] as const;
+export type TrainingProgramStatus = (typeof trainingProgramStatuses)[number];
+
+export interface TrainingProgram {
+  id: string;
+  siteId: string;
   name: string;
-  action: string;
-  time: string;
+  description?: string;
+  /** "TrainingCategory" Master record id. */
+  categoryId?: string;
+  /** The trainer IS an Employee — no second person model (section 27). */
+  trainerId?: string;
+  durationHours?: number;
+  mode: TrainingMode;
+  startDate: string;
+  endDate: string;
+  capacity: number;
+  status: TrainingProgramStatus;
+  /** Optional link so completing this program can propose a skill bump (section 17) and so it can be recommended from a skill gap (section 9). */
+  relatedSkillId?: string;
+  targetSkillLevelId?: string;
+  /** Only ever set by whoever creates the program — never fabricated (section 29). */
+  programCost?: number;
+  perEmployeeCost?: number;
+  vendorCost?: number;
+  createdBy: string;
+  createdOn: string;
+}
+
+export type TrainingRequirementScope = "Employee" | "Department" | "Designation" | "Grade" | "Skill";
+
+/**
+ * A rule, not a hierarchy (section 8) — targetId is an existing id
+ * (Employee.employeeId / OrgUnit.id / a "Designation" or "JobGrade" or
+ * "Skill" Master id) depending on `scope`; no parallel org tree.
+ */
+export interface TrainingRequirement {
+  id: string;
+  siteId: string;
+  scope: TrainingRequirementScope;
+  targetId: string;
+  requiredSkillId: string;
+  requiredSkillLevelId: string;
+  requiredTrainingProgramId?: string;
+  createdBy: string;
+  createdOn: string;
+}
+
+export const trainingEnrollmentStatuses = ["Registered", "Approved", "In Progress", "Completed", "Failed", "Cancelled", "No Show"] as const;
+export type TrainingEnrollmentStatus = (typeof trainingEnrollmentStatuses)[number];
+export type TrainingResult = "Passed" | "Failed" | "Not Attempted";
+
+/** employeeId + siteId + trainingProgramId identifies an enrollment — assessment/completion fields live here directly rather than in a separate 1:1 table (section 11/15/16). */
+export interface TrainingEnrollment {
+  id: string;
+  employeeId: string;
+  siteId: string;
+  trainingProgramId: string;
+  status: TrainingEnrollmentStatus;
+  /** Set when this enrollment originated from an approved TrainingRequest. */
+  requestId?: string;
+  registeredOn: string;
+  registeredBy: string;
+  score?: number;
+  result?: TrainingResult;
+  trainerFeedback?: string;
+  assessmentDate?: string;
+  completionDate?: string;
+  /** A reference string HR/the trainer types in — never a generated/fake URL (section 16). */
+  certificateReference?: string;
+}
+
+export interface TrainingSession {
+  id: string;
+  trainingProgramId: string;
+  siteId: string;
+  date: string;
+  startTime?: string;
+  endTime?: string;
+  trainerId?: string;
+  location?: string;
+  createdBy: string;
+  createdOn: string;
+}
+
+export type TrainingAttendanceStatus = "Present" | "Absent" | "Late" | "No Show";
+
+/** A separate domain from Employee Attendance (section 14) — never writes to AttendanceRecord. */
+export interface TrainingAttendance {
+  id: string;
+  sessionId: string;
+  enrollmentId: string;
+  employeeId: string;
+  siteId: string;
+  status: TrainingAttendanceStatus;
+  markedBy: string;
+  markedOn: string;
+}
+
+export const trainingRequestStatuses = ["Pending", "Approved", "Rejected", "Completed", "Cancelled"] as const;
+export type TrainingRequestStatus = (typeof trainingRequestStatuses)[number];
+
+export interface TrainingRequest {
+  id: string;
+  employeeId: string;
+  siteId: string;
+  trainingProgramId: string;
+  reason: string;
+  requestedDate: string;
+  status: TrainingRequestStatus;
+  decidedBy?: string;
+  decidedOn?: string;
+  comment?: string;
+}
+
+/* ------------------------------------------------------------------ */
+/* Asset Management & Employee Asset Lifecycle (Phase 15)               */
+/* Reuses: Employee/Site/Masters/RBAC/Approval Engine/Offboarding — see  */
+/* asset-context.tsx. Employee display names are always resolved from    */
+/* the Employee Store, never stored as the source of truth here.         */
+/* ------------------------------------------------------------------ */
+
+export const assetStatuses = ["Available", "Assigned", "Under Maintenance", "Lost", "Damaged", "Retired", "Disposed"] as const;
+export type AssetStatus = (typeof assetStatuses)[number];
+
+/**
+ * A small, fixed condition scale — kept a plain union rather than a Master
+ * (unlike SkillLevel, nothing here needs a configurable numeric ordinal;
+ * matches the existing precedent of TrainingMode/TrainingResult staying
+ * plain unions for the same reason).
+ */
+export type AssetCondition = "New" | "Good" | "Fair" | "Damaged";
+
+export interface Asset {
+  id: string;
+  /** Human-facing identifier, e.g. "L001" — distinct from the internal id. */
+  assetCode: string;
+  siteId: string;
+  /** "AssetType" Master record id — Category is resolved from that record's own `category` attribute, never duplicated onto the Asset itself. */
+  assetTypeId: string;
+  name: string;
+  brand?: string;
+  model?: string;
+  serialNumber?: string;
+  purchaseDate?: string;
+  purchaseCost?: number;
+  warrantyExpiry?: string;
+  vendor?: string;
+  /** Free-text physical location (e.g. "Noida — IT Storage Room") — distinct from the Organization "Location" master, which represents office/branch locations. */
+  location?: string;
+  condition: AssetCondition;
+  status: AssetStatus;
+  remarks?: string;
+  createdBy: string;
+  createdOn: string;
+}
+
+/**
+ * Append-only, exactly like EmployeeSalaryStructure/EmployeeSkill: the
+ * "current" assignment for an asset is always just "the one with no
+ * returnedDate", and every prior assignment stays on file untouched — see
+ * asset-engine.ts. A transfer closes one record (stamping
+ * transferredToEmployeeId instead of a plain return) and opens a new one in
+ * the same transaction, so employeeId is never mutated in place.
+ */
+export interface AssetAssignment {
+  id: string;
+  assetId: string;
+  employeeId: string;
+  siteId: string;
+  assignedDate: string;
+  assignedBy: string;
+  conditionAtAssignment: AssetCondition;
+  remarks?: string;
+  returnedDate?: string;
+  returnedBy?: string;
+  conditionAtReturn?: AssetCondition;
+  returnRemarks?: string;
+  damageNotes?: string;
+  /** Set instead of a plain return when this assignment was closed by a transfer to another employee. */
+  transferredToEmployeeId?: string;
+  /** Full ISO timestamp — the real ordering key for history/current-assignment resolution (assignedDate is only day-precision and can tie, same lesson as EmployeeSkill in Phase 14). */
+  createdOn: string;
+}
+
+export type AssetMaintenanceStatus = "Reported" | "In Progress" | "Completed";
+
+export interface AssetMaintenance {
+  id: string;
+  assetId: string;
+  siteId: string;
+  issue: string;
+  reportedDate: string;
+  maintenanceStart?: string;
+  maintenanceEnd?: string;
+  /** Undefined means genuinely not recorded — displayed as "Not recorded", never defaulted to 0 (section 15). */
+  cost?: number;
+  vendor?: string;
+  remarks?: string;
+  status: AssetMaintenanceStatus;
+  createdBy: string;
+  createdOn: string;
+}
+
+export interface AssetDisposal {
+  id: string;
+  assetId: string;
+  siteId: string;
+  disposalDate: string;
+  reason: string;
+  approvedBy: string;
+  remarks?: string;
+  createdOn: string;
+}
+
+export type AssetAuditAction =
+  | "created"
+  | "assigned"
+  | "returned"
+  | "transferred"
+  | "maintenance_started"
+  | "maintenance_completed"
+  | "marked_damaged"
+  | "retired"
+  | "disposed";
+
+export interface AssetAuditEntry {
+  id: string;
+  assetId: string;
+  action: AssetAuditAction;
+  actorName: string;
+  detail: string;
+  timestamp: string;
+}
+
+export const assetRequestStatuses = ["Pending", "Approved", "Rejected", "Assigned", "Cancelled"] as const;
+export type AssetRequestStatus = (typeof assetRequestStatuses)[number];
+
+/** What the employee wants (an AssetType, not a specific unit) — mirrors TrainingRequest's shape exactly. */
+export interface AssetRequest {
+  id: string;
+  employeeId: string;
+  siteId: string;
+  assetTypeId: string;
+  reason: string;
+  requestedDate: string;
+  status: AssetRequestStatus;
+  decidedBy?: string;
+  decidedOn?: string;
+  comment?: string;
+  /** Set once an actual Asset unit is assigned to fulfill this request. */
+  assignedAssetId?: string;
 }
 
 /* ------------------------------------------------------------------ */
@@ -1049,6 +1721,30 @@ export interface OnboardingCase {
   createdOn: string;
   completedOn?: string;
   cancelledReason?: string;
+
+  /**
+   * Set only when this case originated from an accepted Recruitment Offer
+   * (see recruitment-context.tsx). Denormalized here — rather than looked
+   * up live from Recruitment at completion time — because OnboardingProvider
+   * is not (and shouldn't need to be) mounted as a descendant of
+   * RecruitmentProvider; this is the one hand-off point between the two
+   * modules. All optional/additive: a case HR creates manually today keeps
+   * working exactly as before, with Employee creation falling back to the
+   * plain department/designation text fields.
+   */
+  recruitmentApplicationId?: string;
+  departmentId?: string;
+  subDepartmentId?: string;
+  designationId?: string;
+  gradeId?: string;
+  employmentTypeId?: string;
+  employeeTypeId?: string;
+  reportingManagerId?: string;
+  probationPeriodMonths?: number;
+  /** Carried from the accepted Offer so Employee creation can also seed a real EmployeeSalaryStructure — see payroll-context.tsx saveSalaryStructure. */
+  offerCtcAnnual?: number;
+  offerEarnings?: SalaryLine[];
+  offerDeductions?: SalaryLine[];
 }
 
 export type OnboardingAuditAction =
@@ -1188,20 +1884,37 @@ export interface OffboardingAuditEntry {
 /* ------------------------------------------------------------------ */
 
 export type TravelMode = "Flight" | "Train" | "Bus" | "Cab" | "Self";
-export type TravelRequestStatus = "Pending" | "Approved" | "Rejected" | "Completed";
+export type TravelType = "Domestic" | "International";
+export type TravelRequestStatus = "Pending" | "Approved" | "Rejected" | "Cancelled" | "Completed";
 
+/**
+ * A pre-travel approval request — distinct from ExpenseClaim (Phase 16,
+ * section: "Travel Request is a pre-travel approval process; Expense Claim
+ * is an actual reimbursement process after an expense occurs" — never
+ * merged, never auto-converted one into the other).
+ */
 export interface TravelRequest {
   id: string;
   employeeId: string;
+  /** Denormalized for seed/legacy convenience only — always resolve the live name from the Employee Store for display. */
   employee: string;
+  siteId: string;
   purpose: string;
+  travelType: TravelType;
+  /** Origin location. */
+  from: string;
+  /** Destination location. */
   destination: string;
   mode: TravelMode;
   fromDate: string;
   toDate: string;
   estimatedCost: number;
+  advanceRequired: boolean;
+  advanceAmount?: number;
+  accommodationRequired: boolean;
+  transportRequired: boolean;
+  remarks?: string;
   status: TravelRequestStatus;
-  siteId?: string;
   appliedOn: string;
   approverId?: string;
   approverName?: string;
@@ -1209,22 +1922,15 @@ export interface TravelRequest {
   decidedOn?: string;
 }
 
-export type ExpenseCategory =
-  | "Travel"
-  | "Accommodation"
-  | "Food"
-  | "Fuel"
-  | "Internet & Phone"
-  | "Client Entertainment"
-  | "Other";
-
 export interface ExpenseItem {
   id: string;
   date: string;
-  category: ExpenseCategory;
+  /** "ExpenseCategory" Master record id — Masters-backed, not a hardcoded union (section 8). */
+  categoryId: string;
   amount: number;
   description: string;
-  hasReceipt: boolean;
+  /** Filename/reference only, matching EmployeeDocumentRecord.fileRef — no real file upload/storage in this mock environment. */
+  receiptReference?: string;
   overLimitNote?: string;
 }
 
@@ -1234,18 +1940,26 @@ export type ExpenseClaimStatus =
   | "Manager Approved"
   | "Finance Approved"
   | "Rejected"
+  | "Cancelled"
   | "Reimbursed";
 
+/**
+ * An actual post-spend reimbursement claim, with one or more ExpenseItem
+ * lines. totalAmount is always derived from items (section 9) — never a
+ * manually entered source of truth.
+ */
 export interface ExpenseClaim {
   id: string;
   employeeId: string;
+  /** Denormalized for seed/legacy convenience only — always resolve the live name from the Employee Store for display. */
   employee: string;
+  siteId: string;
   title: string;
+  /** Optional link to a pre-travel TravelRequest — non-travel expenses are equally valid (section 17). */
   travelRequestId?: string;
   items: ExpenseItem[];
   totalAmount: number;
   status: ExpenseClaimStatus;
-  siteId?: string;
   submittedOn?: string;
   managerId?: string;
   managerName?: string;
@@ -1254,8 +1968,14 @@ export interface ExpenseClaim {
   financeName?: string;
   financeDecisionReason?: string;
   financeDecidedOn?: string;
+  /** Set at Finance approval — defaults to totalAmount, editable down for a genuine partial approval (section 15). */
+  approvedAmount?: number;
   reimbursedOn?: string;
+  /** Set at reimbursement — defaults to approvedAmount, editable down for a genuine partial reimbursement (section 15). */
+  reimbursedAmount?: number;
   reimbursementReference?: string;
+  reimbursementMethod?: string;
+  reimbursedBy?: string;
 }
 
 export type ExpenseAuditAction =
@@ -1268,7 +1988,9 @@ export type ExpenseAuditAction =
   | "reimbursed"
   | "cancelled"
   | "travel_requested"
-  | "travel_decided";
+  | "travel_edited"
+  | "travel_decided"
+  | "travel_cancelled";
 
 export interface ExpenseAuditEntry {
   id: string;
@@ -1293,7 +2015,7 @@ export interface ExpenseAuditEntry {
 /* approval-context.tsx.                                                */
 /* ------------------------------------------------------------------ */
 
-export const approvalModules = ["Leave", "Regularization", "Expense", "Loan", "Payroll"] as const;
+export const approvalModules = ["Leave", "Regularization", "Expense", "Loan", "Payroll", "Requisition", "Employee", "Offboarding", "Performance", "Appraisal", "Training", "Asset"] as const;
 export type ApprovalModule = (typeof approvalModules)[number];
 
 export const approverTypes = [
@@ -1347,4 +2069,32 @@ export interface ApprovalInstance {
   requestedAt: string;
   completedAt?: string;
   actions: ApprovalAction[];
+}
+
+/* ------------------------------------------------------------------ */
+/* In-app Notifications (Phase 17)                                      */
+/*                                                                      */
+/* Foundation only — no email/SMS provider. Every notification targets  */
+/* exactly one employeeId, so RBAC/site scoping is automatic: a user    */
+/* only ever queries their own notifications (see notification-        */
+/* context.tsx). Modules call notify() from their own action functions  */
+/* the same way they call recordMirroredAction() — this never replaces  */
+/* a module's own status field or audit trail.                          */
+/* ------------------------------------------------------------------ */
+
+export type NotificationType = "info" | "success" | "warning" | "action_required";
+
+export interface AppNotification {
+  id: string;
+  /** Recipient — always a real employeeId, never a role/site broadcast (keeps scoping trivial and correct). */
+  employeeId: string;
+  type: NotificationType;
+  title: string;
+  message: string;
+  module: string;
+  /** The record this notification is about, if any — used to build `href`. */
+  recordId?: string;
+  href?: string;
+  read: boolean;
+  createdAt: string;
 }

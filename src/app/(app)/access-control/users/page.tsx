@@ -21,7 +21,7 @@ import type { AccountStatus } from "@/lib/types";
 
 export default function AccessControlUsersPage() {
   const { accounts, roles, createAccount, setAccountRoles, setAccountStatus, unlockAccount } = useAccessControl();
-  const { sites } = useSite();
+  const { sites, mappedSites, isSuperAdmin } = useSite();
   const { employees } = useEmployees();
   const now = useNow();
 
@@ -36,9 +36,19 @@ export default function AccessControlUsersPage() {
   const [deactivateFor, setDeactivateFor] = useState<string | null>(null);
 
   const roleNameById = useMemo(() => Object.fromEntries(roles.map((r) => [r.id, r.name])), [roles]);
-  const unassignedEmployees = employees.filter((e) => !accounts.some((a) => a.employeeId === e.employeeId));
+  // Site-scoped for everyone but Super Admin — this page previously showed
+  // (and let a Site/HR Admin export) every account across every site
+  // regardless of their own site mapping (Phase 17 fix).
+  const scopedSites = isSuperAdmin ? sites : mappedSites;
+  const scopedSiteIds = useMemo(() => new Set(scopedSites.map((s) => s.id)), [scopedSites]);
+  const scopedEmployees = useMemo(() => (isSuperAdmin ? employees : employees.filter((e) => scopedSiteIds.has(e.siteId))), [employees, isSuperAdmin, scopedSiteIds]);
+  const scopedAccounts = useMemo(
+    () => (isSuperAdmin ? accounts : accounts.filter((a) => a.siteIds.some((id) => scopedSiteIds.has(id)))),
+    [accounts, isSuperAdmin, scopedSiteIds],
+  );
+  const unassignedEmployees = scopedEmployees.filter((e) => !accounts.some((a) => a.employeeId === e.employeeId));
 
-  const filtered = accounts.filter((a) => {
+  const filtered = scopedAccounts.filter((a) => {
     const matchesSearch =
       !search ||
       a.name.toLowerCase().includes(search.toLowerCase()) ||
@@ -95,14 +105,14 @@ export default function AccessControlUsersPage() {
     );
   }
 
-  const rolesModalAccount = accounts.find((a) => a.id === rolesModalFor);
-  const deactivateAccount = accounts.find((a) => a.id === deactivateFor);
+  const rolesModalAccount = scopedAccounts.find((a) => a.id === rolesModalFor);
+  const deactivateAccount = scopedAccounts.find((a) => a.id === deactivateFor);
 
   return (
     <div>
       <div className="mb-4 flex flex-wrap items-center justify-between gap-3">
         <p className="text-sm text-slate-500 dark:text-slate-400">
-          {accounts.length} user account{accounts.length === 1 ? "" : "s"} across the organization
+          {scopedAccounts.length} user account{scopedAccounts.length === 1 ? "" : "s"} {isSuperAdmin ? "across the organization" : "at your site(s)"}
         </p>
         <div className="flex items-center gap-2">
           <Can feature="access-control.users" action="export">
@@ -319,7 +329,7 @@ export default function AccessControlUsersPage() {
             <div>
               <span className="mb-1.5 block text-sm font-medium text-slate-700 dark:text-slate-300">Site Access</span>
               <div className="grid grid-cols-2 gap-2 rounded-lg border border-slate-200 p-3 dark:border-slate-700">
-                {sites.map((s) => (
+                {scopedSites.map((s) => (
                   <label key={s.id} className="flex items-center gap-2 text-sm text-slate-600 dark:text-slate-300">
                     <input type="checkbox" name="siteIds" value={s.id} className="h-4 w-4 rounded border-slate-300 text-indigo-600 focus:ring-indigo-500 dark:border-slate-600 dark:bg-slate-800" />
                     {s.name}

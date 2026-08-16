@@ -11,13 +11,15 @@ import { StatusBadge } from "@/components/ui/status-badge";
 import { Button } from "@/components/ui/button";
 import { Modal } from "@/components/ui/modal";
 import { Field, Input, Select, Textarea } from "@/components/ui/form";
-import { TBody, Td, Th, THead, Table, Tr } from "@/components/ui/table";
-import { employees } from "@/lib/mock-data";
+import { EmptyRow, TBody, Td, Th, THead, Table, Tr } from "@/components/ui/table";
 import { separationReasons } from "@/lib/offboarding-data";
+import { useEmployees } from "@/lib/employee-context";
 import { useOffboarding } from "@/lib/offboarding-context";
 import { useAccessControl } from "@/lib/access-control-context";
+import { useAssets } from "@/lib/asset-context";
+import { useMasters } from "@/lib/master-context";
 import { useToast } from "@/lib/toast-context";
-import type { ClearanceDepartment, ClearanceItemStatus } from "@/lib/types";
+import type { AssetCondition, ClearanceDepartment, ClearanceItemStatus } from "@/lib/types";
 
 const clearanceStatuses: ClearanceItemStatus[] = ["Pending", "Cleared", "Flagged"];
 const departmentOrder: ClearanceDepartment[] = ["IT", "Admin", "Finance", "HR"];
@@ -36,6 +38,7 @@ export default function OffboardingCaseDetailPage(props: PageProps<"/offboarding
   const { id } = use(props.params);
   const toast = useToast();
   const { currentUser } = useAccessControl();
+  const { employees } = useEmployees();
   const {
     caseById,
     auditFor,
@@ -52,6 +55,8 @@ export default function OffboardingCaseDetailPage(props: PageProps<"/offboarding
     advanceLetterStatus,
     completeOffboarding,
   } = useOffboarding();
+  const { activeAssignmentsForEmployee, assetById, returnAsset } = useAssets();
+  const { recordsOfType } = useMasters();
 
   const record = caseById(id);
   if (!record) {
@@ -64,10 +69,19 @@ export default function OffboardingCaseDetailPage(props: PageProps<"/offboarding
   const [interviewModal, setInterviewModal] = useState<"schedule" | "feedback" | null>(null);
   const [payModalOpen, setPayModalOpen] = useState(false);
   const [lineItemModalOpen, setLineItemModalOpen] = useState(false);
+  const [returnAssignmentId, setReturnAssignmentId] = useState<string | null>(null);
 
   const isOwn = record!.employeeId === currentUser.employeeId;
   const clearanceEditable = canManage && openStatuses.includes(record!.status);
-  const canComplete = canManage && record!.clearanceItems.every((i) => i.status === "Cleared") && record!.settlement.status === "Paid" && record!.status !== "Completed";
+  // Derived, never stored (section 13) — recomputed live off the real AssetAssignment store every render.
+  const pendingAssetReturns = activeAssignmentsForEmployee(record!.employeeId);
+  const assetClearanceComplete = pendingAssetReturns.length === 0;
+  const canComplete =
+    canManage &&
+    record!.clearanceItems.every((i) => i.status === "Cleared") &&
+    record!.settlement.status === "Paid" &&
+    record!.status !== "Completed" &&
+    pendingAssetReturns.length === 0;
 
   function handleApprove() {
     const result = approveSeparation(record!.id);
@@ -152,9 +166,23 @@ export default function OffboardingCaseDetailPage(props: PageProps<"/offboarding
     (result.ok ? toast.success : toast.error)(result.message);
   }
 
+  function handleAssetReturn(e: FormEvent<HTMLFormElement>) {
+    e.preventDefault();
+    if (!returnAssignmentId) return;
+    const form = new FormData(e.currentTarget);
+    const result = returnAsset(returnAssignmentId, {
+      conditionAtReturn: String(form.get("condition") ?? "Good") as AssetCondition,
+      remarks: String(form.get("remarks") ?? "") || undefined,
+      damageNotes: String(form.get("damageNotes") ?? "") || undefined,
+    });
+    (result.ok ? toast.success : toast.error)(result.message);
+    if (result.ok) setReturnAssignmentId(null);
+  }
+
   const tabs = [
     { id: "overview", label: "Overview" },
     { id: "clearance", label: "Clearance" },
+    { id: "assets", label: "Assets" },
     { id: "exit-interview", label: "Exit Interview" },
     { id: "settlement", label: "Full & Final Settlement" },
     { id: "documents", label: "Documents" },
@@ -204,6 +232,9 @@ export default function OffboardingCaseDetailPage(props: PageProps<"/offboarding
           <span>Reason: <span className="font-medium text-slate-700 dark:text-slate-200">{record!.reason}</span></span>
           <span>Notice: {record!.noticePeriodDays} days</span>
           {record!.approverName && <span>Decided by {record!.approverName}</span>}
+          <span className="ml-auto flex items-center gap-1.5">
+            Asset Clearance: <StatusBadge status={assetClearanceComplete ? "Cleared" : "Pending"} />
+          </span>
         </div>
         {record!.decisionReason && (
           <p className="mt-3 text-sm text-slate-500 dark:text-slate-400">{record!.decisionReason}</p>
@@ -274,6 +305,59 @@ export default function OffboardingCaseDetailPage(props: PageProps<"/offboarding
             );
           })}
         </div>
+      )}
+
+      {active === "assets" && (
+        <Card>
+          <CardHeader className="flex flex-row items-center justify-between">
+            <CardTitle>Asset Return</CardTitle>
+            <StatusBadge status={assetClearanceComplete ? "Cleared" : "Pending"} />
+          </CardHeader>
+          <CardContent className="pt-0">
+            <Table>
+              <THead>
+                <Th>Asset</Th>
+                <Th>Type</Th>
+                <Th>Assigned Date</Th>
+                <Th>Condition</Th>
+                <Th>Status</Th>
+                <Th></Th>
+              </THead>
+              <TBody>
+                {pendingAssetReturns.map((asn) => {
+                  const asset = assetById(asn.assetId);
+                  if (!asset) return null;
+                  return (
+                    <Tr key={asn.id}>
+                      <Td className="font-medium text-slate-800 dark:text-slate-100">
+                        <Link href={`/assets/${asset.id}`} className="hover:text-indigo-600 dark:hover:text-indigo-400">
+                          {asset.name}
+                        </Link>
+                        <p className="text-xs text-slate-400 dark:text-slate-500">{asset.assetCode}</p>
+                      </Td>
+                      <Td>{recordsOfType("AssetType").find((t) => t.id === asset.assetTypeId)?.name ?? "—"}</Td>
+                      <Td>{asn.assignedDate}</Td>
+                      <Td>
+                        <StatusBadge status={asn.conditionAtAssignment} />
+                      </Td>
+                      <Td>
+                        <StatusBadge status="Pending" />
+                      </Td>
+                      <Td>
+                        {canManage && (
+                          <Button size="sm" onClick={() => setReturnAssignmentId(asn.id)}>
+                            Record Return
+                          </Button>
+                        )}
+                      </Td>
+                    </Tr>
+                  );
+                })}
+                {pendingAssetReturns.length === 0 && <EmptyRow colSpan={6}>No pending asset returns.</EmptyRow>}
+              </TBody>
+            </Table>
+          </CardContent>
+        </Card>
       )}
 
       {active === "exit-interview" && (
@@ -518,6 +602,31 @@ export default function OffboardingCaseDetailPage(props: PageProps<"/offboarding
               Cancel
             </Button>
             <Button type="submit">Mark Paid</Button>
+          </div>
+        </form>
+      </Modal>
+
+      <Modal open={!!returnAssignmentId} onClose={() => setReturnAssignmentId(null)} title="Record Asset Return">
+        <form className="space-y-4" onSubmit={handleAssetReturn}>
+          <Field label="Condition at Return">
+            <Select name="condition" required defaultValue="Good">
+              <option value="New">New</option>
+              <option value="Good">Good</option>
+              <option value="Fair">Fair</option>
+              <option value="Damaged">Damaged</option>
+            </Select>
+          </Field>
+          <Field label="Remarks (optional)">
+            <Textarea name="remarks" rows={2} />
+          </Field>
+          <Field label="Damage Notes (optional)">
+            <Textarea name="damageNotes" rows={2} />
+          </Field>
+          <div className="flex justify-end gap-2 pt-2">
+            <Button type="button" variant="outline" onClick={() => setReturnAssignmentId(null)}>
+              Cancel
+            </Button>
+            <Button type="submit">Confirm Return</Button>
           </div>
         </form>
       </Modal>
