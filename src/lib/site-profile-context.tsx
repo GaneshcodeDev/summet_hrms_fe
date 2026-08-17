@@ -9,7 +9,7 @@ import {
   type ReactNode,
 } from "react";
 import { employeeSiteMappingsStore, siteProfilesStore } from "@/lib/site-profile-store";
-import { employees } from "@/lib/mock-data";
+import { useEmployees } from "@/lib/employee-context";
 import { useAccessControl } from "@/lib/access-control-context";
 import type { Employee, EmployeeSiteMapping, SiteHoliday, SiteProfile, SiteShift } from "@/lib/types";
 
@@ -48,6 +48,7 @@ const SiteProfileContext = createContext<SiteProfileContextValue | undefined>(un
 
 export function SiteProfileProvider({ children }: { children: ReactNode }) {
   const { currentUser } = useAccessControl();
+  const { employees } = useEmployees();
 
   const siteProfiles = useSyncExternalStore(
     siteProfilesStore.subscribe,
@@ -126,7 +127,7 @@ export function SiteProfileProvider({ children }: { children: ReactNode }) {
         return value === orgUnitId;
       });
     },
-    [employeeSiteMappings],
+    [employeeSiteMappings, employees],
   );
 
   const setEmployeeMapping = useCallback(
@@ -145,7 +146,7 @@ export function SiteProfileProvider({ children }: { children: ReactNode }) {
       const rest = employeeSiteMappingsStore.getSnapshot().filter((m) => m.employeeId !== employeeId);
       employeeSiteMappingsStore.set([...rest, next]);
     },
-    [currentUser.name],
+    [currentUser.name, employees],
   );
 
   const value = useMemo<SiteProfileContextValue>(

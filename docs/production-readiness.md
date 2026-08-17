@@ -161,3 +161,47 @@ Per the Phase 17 stop condition: no PostgreSQL/MongoDB, no NestJS/API
 server, no Redis, no Docker, no email/SMS provider, no AI, no external
 integrations. This document is the plan for that work, not the work
 itself. The localStorage architecture is preserved and hardened in place.
+
+## 7. Addendum — Phase 18B (production data cleanup)
+
+This phase re-verified the "fresh install starts empty" claim made
+throughout this document and `architecture-audit.md`, and found it was
+already true for every store listed in §3 above — each one is
+initialized to `[]` (or, for `rbac-store.ts`'s `accountsStore`, to
+exactly `[superAdminAccount]`) and is populated only via real user
+action or the explicit, opt-in `loadDemoData()` in `demo-seed.ts`. No
+store auto-seeds itself on a fresh boot. Two changes were made this
+phase to make that guarantee more robust:
+
+1. **"Load Demo Data" is now gated behind `isDemoDataEnabled`**
+   (`src/lib/demo-seed.ts`): `process.env.NODE_ENV !== "production"`.
+   Next.js inlines `NODE_ENV` as the literal `"production"` at build
+   time, so in a real production build (`next build && next start`) this
+   evaluates once, at build time, to a hard `false` — the button (in
+   both `dashboard/page.tsx`'s empty-platform state and `sites/page.tsx`'s
+   empty-sites state) simply never renders for a real user. Previously
+   it rendered unconditionally whenever `sites.length === 0`, with no
+   environment check at all — functionally harmless (it still required
+   an explicit click), but not aligned with "must never appear as a
+   normal client HR feature" for a production deployment.
+2. **Several live pages were found reading business data (employees,
+   departments) directly from `mock-data.ts` instead of the real
+   stores** — a correctness bug distinct from demo-data seeding, since
+   it meant those specific screens would never reflect real data no
+   matter what a client entered. Fixed; full detail in
+   `architecture-audit.md`'s Phase 18B addendum.
+
+**Verification performed this phase**: `npx tsc --noEmit` (clean),
+`next build` in a production-mode environment (`NODE_ENV=production`,
+succeeded — 40 routes compiled), `eslint` on every changed file (no new
+warnings/errors), and a dev-server smoke test (all edited routes return
+HTTP 200 with no server-side console errors, checked via a synthetic
+session cookie since this app's auth is entirely client-side and cannot
+be driven through `curl` alone). No headless-browser/Playwright tooling
+was available in this environment to perform full interactive
+click-through verification — see `docs/production-readiness.md`'s
+sibling note in the Phase 18B final report for what that means for
+confidence level. There is no `npm test` script or Jest/Vitest/Playwright
+configuration in this repository at the time of this phase — automated
+regression testing remains a Future Roadmap item (`docs/BRD.md` §34), not
+something this phase invented.

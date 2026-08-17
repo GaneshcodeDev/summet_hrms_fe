@@ -10,8 +10,8 @@ import { StatusBadge } from "@/components/ui/status-badge";
 import { useOrg } from "@/lib/org-context";
 import { useSite } from "@/lib/site-context";
 import { orgUnitTypeConfig } from "@/lib/org-data";
-import { getEmployeeById } from "@/lib/mock-data";
-import type { OrgUnit } from "@/lib/types";
+import { useEmployees } from "@/lib/employee-context";
+import type { Employee, OrgUnit } from "@/lib/types";
 
 function matchesQuery(unit: OrgUnit, query: string) {
   const q = query.toLowerCase();
@@ -25,6 +25,7 @@ function Row({
   visibleIds,
   expanded,
   toggle,
+  getEmployeeById,
 }: {
   unit: OrgUnit;
   depth: number;
@@ -32,6 +33,7 @@ function Row({
   visibleIds: Set<string> | null;
   expanded: Set<string>;
   toggle: (id: string) => void;
+  getEmployeeById: (employeeId: string) => Employee | undefined;
 }) {
   const allChildren = childrenOf(unit.id);
   const children = visibleIds ? allChildren.filter((c) => visibleIds.has(c.id)) : allChildren;
@@ -78,6 +80,7 @@ function Row({
               visibleIds={visibleIds}
               expanded={expanded}
               toggle={toggle}
+              getEmployeeById={getEmployeeById}
             />
           ))}
         </div>
@@ -89,6 +92,7 @@ function Row({
 export default function OrganizationHierarchyPage() {
   const { orgUnits } = useOrg();
   const { currentSiteId, isAllSites } = useSite();
+  const { getEmployeeByEmployeeId } = useEmployees();
   const [search, setSearch] = useState("");
   const [statusFilter, setStatusFilter] = useState("All Status");
   const [expanded, setExpanded] = useState<Set<string>>(new Set());
@@ -166,6 +170,7 @@ export default function OrganizationHierarchyPage() {
               visibleIds={visibleIds}
               expanded={expanded}
               toggle={toggle}
+              getEmployeeById={getEmployeeByEmployeeId}
             />
           ))}
         </div>

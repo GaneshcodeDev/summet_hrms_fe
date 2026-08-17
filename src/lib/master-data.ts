@@ -33,7 +33,6 @@ import {
   type LucideIcon,
 } from "lucide-react";
 import type { MasterAttributes, MasterFieldType, MasterRecord, MasterType } from "@/lib/types";
-import { departments } from "@/lib/mock-data";
 
 export interface MasterFieldDef {
   key: string;
@@ -95,7 +94,11 @@ export const masterTypeConfig: Record<MasterType, MasterTypeConfig> = {
     group: "Employment",
     scope: "tenant",
     fields: [
-      { key: "department", label: "Department", type: "select", options: departments.map((d) => d.name) },
+      // "department" options are resolved live from Organization > Department
+      // units by the form (master-manager.tsx), not listed statically here —
+      // Department is org-store-backed (see managedExternally above), not a
+      // Masters-store record itself.
+      { key: "department", label: "Department", type: "select" },
       { key: "gradeId", label: "Job Grade", type: "select", refMasterType: "JobGrade" },
     ],
   },

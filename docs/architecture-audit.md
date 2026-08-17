@@ -118,3 +118,49 @@ diverge.
   real and store-backed; refreshing the dates to be relative-to-today is a
   cosmetic follow-up, not done here to avoid touching content beyond the
   wiring bug.
+
+## Addendum — Phase 18B (documentation + production data cleanup)
+
+This phase performed a full read-only audit (RBAC/permissions, Employee
+Master + Lifecycle, Leave/Payroll/Attendance/Approval business rules,
+Recruitment through Reports) to produce `docs/BRD.md`,
+`docs/BRD-Complete.md`, `docs/CLIENT-ONBOARDING-GUIDE.md`, and
+`docs/SYSTEM-ADMIN-GUIDE.md` — see those documents for the full findings.
+Two real defects were found and fixed during that audit's cross-checking
+against actual page behavior (not part of the original per-module audit
+table above, since they were data-source bugs, not RBAC/site-scoping
+bugs):
+
+1. **Several Organization-module screens and one Masters field bypassed
+   the real Employee/Org stores entirely.** `organization/reporting`,
+   `organization/employee-mapping`, `organization/hierarchy`,
+   `organization/chart`, `site-profile-detail.tsx`,
+   `site-profile-context.tsx`, `org-unit-manager.tsx`,
+   `master-context.tsx` (Designation's dependents count), and the
+   Onboarding "Create Case" modal's Department dropdown all imported
+   `employees`/`departments` directly from `src/lib/mock-data.ts`
+   instead of the real `employeesStore`/`OrgUnit` tree. This meant these
+   screens would show the fake 10-person demo roster and 4–5 fake
+   departments even on a brand-new install with zero real employees, and
+   would **never** reflect real employees/departments added afterward —
+   a correctness bug, not just a "fresh install shows fake data"
+   cosmetic issue. Fixed by routing all of the above through
+   `useEmployees()` (employee-context.tsx) and `useOrg()` (org-context.tsx)
+   instead, matching the pattern already used everywhere else in the
+   app. `org-utils.ts`'s `buildOrgUnitTree()` now takes an optional
+   `getEmployeeById` lookup function instead of importing one from
+   `mock-data.ts`.
+2. **Masters > Designation's "Department" field** (`master-data.ts`)
+   had a hardcoded `options: departments.map(...)` sourced from
+   `mock-data.ts`. Fixed: the field now resolves its dropdown live from
+   the real, site-scoped Department `OrgUnit`s in `master-manager.tsx`
+   (mirroring how `refMasterType` already resolves options from
+   `masterRecordsStore` for other fields) — no static option list
+   remains.
+
+`mock-data.ts` itself was not removed — it remains legitimate raw seed
+material consumed only by `demo-seed.ts` (`loadDemoData()`),
+`employee-store.ts`'s `demoEmployeeSeed`, and `rbac-data.ts`'s
+`demoUserAccounts`, all of which are explicitly opt-in via "Load Demo
+Data" (see the production-readiness.md addendum for the demo-data
+gating change made this phase).

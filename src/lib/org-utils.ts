@@ -1,6 +1,5 @@
 import type { ChartNode } from "@/components/organization/tree-chart";
 import { orgUnitTypeConfig } from "@/lib/org-data";
-import { getEmployeeById } from "@/lib/mock-data";
 import type { Employee, OrgUnit } from "@/lib/types";
 
 /** Builds a person-to-person reporting chart from employees' reportingManagerId — no static data. */
@@ -40,7 +39,11 @@ export function buildReportingTree(employees: Employee[], rootEmployeeId?: strin
 }
 
 /** Builds a visual chart of the entity hierarchy (Company -> ... -> Sub Department, etc.) rooted at `rootId`. */
-export function buildOrgUnitTree(units: OrgUnit[], rootId: string): ChartNode | null {
+export function buildOrgUnitTree(
+  units: OrgUnit[],
+  rootId: string,
+  getEmployeeById?: (employeeId: string) => Employee | undefined,
+): ChartNode | null {
   const byParent = new Map<string, OrgUnit[]>();
   for (const u of units) {
     if (u.parentId) {
@@ -52,7 +55,7 @@ export function buildOrgUnitTree(units: OrgUnit[], rootId: string): ChartNode | 
 
   function toNode(unit: OrgUnit): ChartNode {
     const children = (byParent.get(unit.id) ?? []).map(toNode);
-    const head = unit.headEmployeeId ? getEmployeeById(unit.headEmployeeId) : undefined;
+    const head = unit.headEmployeeId ? getEmployeeById?.(unit.headEmployeeId) : undefined;
     const typeLabel = orgUnitTypeConfig[unit.type].label;
     return {
       id: unit.id,

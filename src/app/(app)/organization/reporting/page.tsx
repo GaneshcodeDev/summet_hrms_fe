@@ -2,10 +2,11 @@
 
 import { Card } from "@/components/ui/card";
 import { TreeChart } from "@/components/organization/tree-chart";
-import { employees } from "@/lib/mock-data";
+import { useEmployees } from "@/lib/employee-context";
 import { buildReportingTree } from "@/lib/org-utils";
 
 export default function OrganizationReportingPage() {
+  const { employees } = useEmployees();
   const tree = buildReportingTree(employees);
 
   return (

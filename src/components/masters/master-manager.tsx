@@ -22,10 +22,11 @@ import { StatusBadge } from "@/components/ui/status-badge";
 import { EmptyRow, TBody, Td, Th, THead, Table, Tr } from "@/components/ui/table";
 import { Can } from "@/components/auth/permission-gate";
 import { useMasters } from "@/lib/master-context";
+import { useOrg } from "@/lib/org-context";
 import { useSite } from "@/lib/site-context";
 import { masterTypeConfig, type MasterFieldDef } from "@/lib/master-data";
 import { downloadCsv } from "@/lib/utils";
-import type { MasterAttributes, MasterRecord, MasterType } from "@/lib/types";
+import type { MasterAttributes, MasterRecord, MasterType, OrgUnit } from "@/lib/types";
 
 const PAGE_SIZE = 8;
 type SortField = "name" | "code" | "status";
@@ -62,6 +63,8 @@ export function MasterManager({ type }: { type: MasterType }) {
   const { records, auditFor, dependentsCount, createRecord, updateRecord, setRecordStatus, bulkSetStatus, importRecords } =
     useMasters();
   const { sites, currentSiteId, isAllSites } = useSite();
+  const { orgUnits } = useOrg();
+  const departmentUnits = useMemo(() => orgUnits.filter((u) => u.type === "Department" && u.status === "Active"), [orgUnits]);
   const searchParams = useSearchParams();
 
   const [search, setSearch] = useState("");
@@ -401,6 +404,7 @@ export function MasterManager({ type }: { type: MasterType }) {
           sites={sites}
           defaultSiteId={isAllSites ? sites[0]?.id ?? "" : currentSiteId}
           allRecords={records}
+          departmentUnits={departmentUnits}
           onClose={() => setAddOpen(false)}
           onSubmit={handleCreate}
         />
@@ -413,6 +417,7 @@ export function MasterManager({ type }: { type: MasterType }) {
           initial={editRecord}
           defaultSiteId={editRecord.siteId ?? (isAllSites ? sites[0]?.id ?? "" : currentSiteId)}
           allRecords={records}
+          departmentUnits={departmentUnits}
           onClose={() => setEditRecord(null)}
           onSubmit={handleEdit}
         />
@@ -535,14 +540,31 @@ interface RecordFormModalProps {
   defaultSiteId: string;
   initial?: MasterRecord;
   allRecords: MasterRecord[];
+  departmentUnits: OrgUnit[];
   onClose: () => void;
   onSubmit: (e: FormEvent<HTMLFormElement>) => void;
 }
 
-function RecordFormModal({ config, sites, defaultSiteId, initial, allRecords, onClose, onSubmit }: RecordFormModalProps) {
+function RecordFormModal({
+  config,
+  sites,
+  defaultSiteId,
+  initial,
+  allRecords,
+  departmentUnits,
+  onClose,
+  onSubmit,
+}: RecordFormModalProps) {
   const [siteId, setSiteId] = useState(initial?.siteId ?? defaultSiteId);
 
   function optionsForField(field: MasterFieldDef): { value: string; label: string }[] {
+    // Department options come from the real Organization > Department units
+    // (site-scoped), never the mock demo dataset — see architecture-audit.md.
+    if (field.key === "department") {
+      return departmentUnits
+        .filter((u) => !siteId || u.siteId === siteId)
+        .map((u) => ({ value: u.name, label: u.name }));
+    }
     if (field.options) return field.options.map((o) => ({ value: o, label: o }));
     if (field.refMasterType) {
       const refConfig = masterTypeConfig[field.refMasterType];
