@@ -4,6 +4,7 @@ import {
   createContext,
   useCallback,
   useContext,
+  useEffect,
   useMemo,
   useSyncExternalStore,
   type ReactNode,
@@ -11,6 +12,15 @@ import {
 import { orgAuditStore, orgStructureConfigStore, orgUnitsStore, logOrgAudit } from "@/lib/org-store";
 import { orgUnitTypeConfig } from "@/lib/org-data";
 import { useAccessControl } from "@/lib/access-control-context";
+import { useSite } from "@/lib/site-context";
+import { apiOrgUnitToOrgUnit } from "@/lib/api/mappers";
+import {
+  createOrgUnit as apiCreateOrgUnit,
+  listOrgUnits,
+  setOrgUnitStatus as apiSetOrgUnitStatus,
+  updateOrgUnit as apiUpdateOrgUnit,
+} from "@/lib/api/organization-api";
+import { isBackendConnected } from "@/lib/api/token-store";
 import { orgUnitTypes } from "@/lib/types";
 import type { AccountStatus, OrgAuditEntry, OrgStructureConfig, OrgUnit, OrgUnitType } from "@/lib/types";
 
@@ -28,9 +38,9 @@ interface OrgContextValue {
   descendantIdsOf: (id: string) => Set<string>;
   ancestorsOf: (id: string) => OrgUnit[];
   auditFor: (orgUnitId: string) => OrgAuditEntry[];
-  createOrgUnit: (input: OrgUnitDraft) => OrgUnit;
-  updateOrgUnit: (id: string, patch: OrgUnitEditable) => void;
-  setOrgUnitStatus: (id: string, status: AccountStatus) => void;
+  createOrgUnit: (input: OrgUnitDraft) => Promise<OrgUnit>;
+  updateOrgUnit: (id: string, patch: OrgUnitEditable) => Promise<void>;
+  setOrgUnitStatus: (id: string, status: AccountStatus) => Promise<void>;
   /** siteId -> structure config. Read directly when you need updatedBy/updatedOn, not just the boolean. */
   orgStructureConfig: Record<string, OrgStructureConfig>;
   isUnitTypeEnabled: (siteId: string, type: OrgUnitType) => boolean;
@@ -59,9 +69,30 @@ const editableFields: (keyof OrgUnitEditable)[] = [
 
 export function OrgProvider({ children }: { children: ReactNode }) {
   const { currentUser } = useAccessControl();
+  // Backend org units are always fetched per-site (never a cross-tenant
+  // list) — see docs/architecture-audit.md. This mirrors that: when
+  // connected, this provider keeps the currently-selected site's org units
+  // in sync with the API; the "All Sites" Super Admin aggregate view stays
+  // on whatever's cached locally (a documented simplification, not a
+  // regression — the per-site isolation itself is proven in the backend's
+  // e2e suite).
+  const { currentSiteId, isAllSites } = useSite();
 
   const orgUnits = useSyncExternalStore(orgUnitsStore.subscribe, orgUnitsStore.getSnapshot, orgUnitsStore.getServerSnapshot);
   const auditEntries = useSyncExternalStore(orgAuditStore.subscribe, orgAuditStore.getSnapshot, orgAuditStore.getServerSnapshot);
+
+  useEffect(() => {
+    if (!isBackendConnected() || isAllSites || !currentSiteId) return;
+    let cancelled = false;
+    void listOrgUnits(currentSiteId).then((apiUnits) => {
+      if (cancelled) return;
+      const mapped = apiUnits.map(apiOrgUnitToOrgUnit);
+      orgUnitsStore.set([...orgUnitsStore.getSnapshot().filter((u) => u.siteId !== currentSiteId), ...mapped]);
+    });
+    return () => {
+      cancelled = true;
+    };
+  }, [currentSiteId, isAllSites]);
 
   const childrenOf = useCallback(
     (parentId: string | null, opts?: { type?: OrgUnitType; siteId?: string }) =>
@@ -110,13 +141,28 @@ export function OrgProvider({ children }: { children: ReactNode }) {
   );
 
   const createOrgUnit = useCallback(
-    (input: OrgUnitDraft) => {
-      const id = `${slugify(input.type)}-${slugify(input.name)}-${Date.now().toString(36)}`;
-      const now = new Date().toISOString();
-      const newUnit: OrgUnit = { ...input, id, status: "Active", createdOn: now, updatedOn: now };
+    async (input: OrgUnitDraft) => {
+      let newUnit: OrgUnit;
+      if (isBackendConnected()) {
+        const created = await apiCreateOrgUnit({
+          siteId: input.siteId,
+          type: input.type,
+          name: input.name,
+          code: input.code,
+          parentId: input.parentId,
+          headEmployeeId: input.headEmployeeId,
+          description: input.description,
+          locationKind: input.locationKind,
+        });
+        newUnit = apiOrgUnitToOrgUnit(created);
+      } else {
+        const id = `${slugify(input.type)}-${slugify(input.name)}-${Date.now().toString(36)}`;
+        const now = new Date().toISOString();
+        newUnit = { ...input, id, status: "Active", createdOn: now, updatedOn: now };
+      }
       orgUnitsStore.update((units) => [...units, newUnit]);
       logOrgAudit({
-        orgUnitId: id,
+        orgUnitId: newUnit.id,
         orgUnitType: input.type,
         orgUnitName: input.name,
         action: "created",
@@ -129,14 +175,29 @@ export function OrgProvider({ children }: { children: ReactNode }) {
   );
 
   const updateOrgUnit = useCallback(
-    (id: string, patch: OrgUnitEditable) => {
+    async (id: string, patch: OrgUnitEditable) => {
       const existing = orgUnitsStore.getSnapshot().find((u) => u.id === id);
       if (!existing) return;
       const changed = editableFields.filter((field) => field in patch && patch[field] !== existing[field]);
       if (changed.length === 0) return;
-      orgUnitsStore.update((units) =>
-        units.map((u) => (u.id === id ? { ...u, ...patch, updatedOn: new Date().toISOString() } : u)),
-      );
+
+      if (isBackendConnected()) {
+        const updated = await apiUpdateOrgUnit(id, {
+          name: patch.name,
+          code: patch.code,
+          parentId: patch.parentId,
+          headEmployeeId: patch.headEmployeeId,
+          description: patch.description,
+          locationKind: patch.locationKind,
+        });
+        const mapped = apiOrgUnitToOrgUnit(updated);
+        orgUnitsStore.set(orgUnitsStore.getSnapshot().map((u) => (u.id === id ? mapped : u)));
+      } else {
+        orgUnitsStore.update((units) =>
+          units.map((u) => (u.id === id ? { ...u, ...patch, updatedOn: new Date().toISOString() } : u)),
+        );
+      }
+
       logOrgAudit({
         orgUnitId: id,
         orgUnitType: existing.type,
@@ -150,12 +211,20 @@ export function OrgProvider({ children }: { children: ReactNode }) {
   );
 
   const setOrgUnitStatus = useCallback(
-    (id: string, status: AccountStatus) => {
+    async (id: string, status: AccountStatus) => {
       const existing = orgUnitsStore.getSnapshot().find((u) => u.id === id);
       if (!existing || existing.status === status) return;
-      orgUnitsStore.update((units) =>
-        units.map((u) => (u.id === id ? { ...u, status, updatedOn: new Date().toISOString() } : u)),
-      );
+
+      if (isBackendConnected()) {
+        const updated = await apiSetOrgUnitStatus(id, status);
+        const mapped = apiOrgUnitToOrgUnit(updated);
+        orgUnitsStore.set(orgUnitsStore.getSnapshot().map((u) => (u.id === id ? mapped : u)));
+      } else {
+        orgUnitsStore.update((units) =>
+          units.map((u) => (u.id === id ? { ...u, status, updatedOn: new Date().toISOString() } : u)),
+        );
+      }
+
       logOrgAudit({
         orgUnitId: id,
         orgUnitType: existing.type,

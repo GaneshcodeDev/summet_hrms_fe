@@ -1,5 +1,7 @@
 "use client";
 
+import { backendLogin, backendLogout } from "@/lib/api/auth-api";
+import { clearTokens } from "@/lib/api/token-store";
 import { hashPassword, verifyPassword } from "@/lib/rbac-data";
 import {
   deviceSessionsStore,
@@ -94,7 +96,26 @@ export function getCurrentAccount(): UserAccount | undefined {
 export type LoginError = "invalid_credentials" | "locked" | "inactive";
 export type LoginResult = { ok: true } | { ok: false; error: LoginError; lockedUntil?: string };
 
-export function login(email: string, password: string, remember: boolean): LoginResult {
+/**
+ * Tries the real backend (summet_hrms_be) first; on success it stores real
+ * JWTs (see lib/api/token-store.ts) so the migrated Sites/Organization/
+ * Masters pages can call the live API. This is independent of, and never
+ * blocks, the existing local session below — most local demo accounts have
+ * no backend counterpart (seeding demo data into the backend is out of
+ * scope), so a failed/skipped backend attempt is the normal case, not an
+ * error. See rbac-data.ts `backendBridgeAccount` for the one demo account
+ * that succeeds on both sides out of the box.
+ */
+async function tryBackendLogin(email: string, password: string): Promise<void> {
+  const backendUser = await backendLogin(email, password);
+  if (!backendUser) {
+    clearTokens();
+  }
+}
+
+export async function login(email: string, password: string, remember: boolean): Promise<LoginResult> {
+  await tryBackendLogin(email, password);
+
   const ip = "203.0.113.10"; // no real network layer in this client-only demo
   const account = findAccountByEmail(email);
 
@@ -165,6 +186,7 @@ export function logout() {
     }
   }
   clearCookie(SESSION_COOKIE);
+  void backendLogout(); // best-effort, fire-and-forget — never blocks local logout
 }
 
 /** Ends every session for the account except the current one. */

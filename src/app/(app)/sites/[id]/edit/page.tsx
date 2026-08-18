@@ -17,8 +17,8 @@ export default function EditSitePage(props: PageProps<"/sites/[id]/edit">) {
   const site = sites.find((s) => s.id === id);
   if (!site) notFound();
 
-  function handleSubmit(updated: Site) {
-    updateSite(id, updated);
+  async function handleSubmit(updated: Site) {
+    await updateSite(id, updated);
     router.push("/sites");
   }
 

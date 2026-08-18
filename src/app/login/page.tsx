@@ -41,13 +41,13 @@ function LoginForm() {
     [accounts, roles],
   );
 
-  function handleSubmit(e: FormEvent) {
+  async function handleSubmit(e: FormEvent) {
     e.preventDefault();
     setError(null);
     setLockedUntil(null);
     setLoading(true);
 
-    const result = login(email, password, remember);
+    const result = await login(email, password, remember);
     if (!result.ok) {
       setLoading(false);
       if (result.error === "locked") {

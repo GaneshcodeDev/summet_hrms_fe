@@ -1,7 +1,7 @@
 "use client";
 
 import { createLocalStorageStore } from "@/lib/local-store";
-import { seedRolePermissions, seedRoles, superAdminAccount } from "@/lib/rbac-data";
+import { backendBridgeAccount, seedRolePermissions, seedRoles, superAdminAccount } from "@/lib/rbac-data";
 import type {
   DeviceSession,
   Role,
@@ -26,7 +26,10 @@ export const rolePermissionsStore = createLocalStorageStore<Record<string, RoleP
   "hrms_role_permissions",
   seedRolePermissions,
 );
-export const accountsStore = createLocalStorageStore<UserAccount[]>("hrms_accounts", [superAdminAccount]);
+export const accountsStore = createLocalStorageStore<UserAccount[]>("hrms_accounts", [
+  superAdminAccount,
+  backendBridgeAccount,
+]);
 export const deviceSessionsStore = createLocalStorageStore<DeviceSession[]>("hrms_device_sessions", []);
 export const securityEventsStore = createLocalStorageStore<SecurityEvent[]>("hrms_security_events", []);
 

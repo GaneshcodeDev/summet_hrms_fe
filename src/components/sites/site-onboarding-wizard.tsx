@@ -16,6 +16,10 @@ import { useEmployees } from "@/lib/employee-context";
 import { useAccessControl } from "@/lib/access-control-context";
 import { useSiteConfig } from "@/lib/site-config-context";
 import { useToast } from "@/lib/toast-context";
+import { siteTypeToApiSiteType } from "@/lib/api/mappers";
+import { onboardSite, type OnboardSitePayload } from "@/lib/api/sites-api";
+import { ApiError } from "@/lib/api/api-client";
+import { isBackendConnected } from "@/lib/api/token-store";
 import { packageFeatures, siteStatuses } from "@/lib/mock-data";
 import { timezoneOptions } from "@/lib/settings-data";
 import { leaveTypeConfig, leaveTypes } from "@/lib/leave-data";
@@ -189,7 +193,7 @@ const initialHoliday: HolidayConfigState = { calendarName: "", holidays: [] };
 export function SiteOnboardingWizard() {
   const router = useRouter();
   const toast = useToast();
-  const { sites, addSite, setCurrentSiteId } = useSite();
+  const { sites, addSite, setCurrentSiteId, refreshSites } = useSite();
   const { createOrgUnit } = useOrg();
   const { createRecord } = useMasters();
   const { createEmployee } = useEmployees();
@@ -248,16 +252,88 @@ export function SiteOnboardingWizard() {
     setStep((s) => Math.max(1, s - 1));
   }
 
-  function handleCreateSite() {
-    const step1Error = validateStep(1);
-    const step3Error = validateStep(3);
-    if (step1Error || step3Error) {
-      setError(step1Error ?? step3Error);
-      setStep(step1Error ? 1 : 3);
-      return;
-    }
+  /**
+   * Backend-connected path: the entire wizard maps to ONE atomic call to
+   * POST /sites/onboarding (see summet_hrms_be SiteOnboardingService) —
+   * Site, org units, initial masters, SiteConfig, and a real Site Admin
+   * User all committed together in a single Prisma transaction, or none of
+   * them if anything fails (409 on a duplicate code/email, etc). This is a
+   * genuine improvement over the local-only path below, which was never
+   * atomic (see the comment on that path for why it stays as-is when
+   * there's no backend connection to use instead).
+   */
+  async function handleCreateSiteViaBackend() {
+    const payload: OnboardSitePayload = {
+      basic: {
+        name: basic.name.trim(),
+        code: basic.code.trim().toUpperCase(),
+        legalName: basic.legalName.trim() || undefined,
+        siteType: siteTypeToApiSiteType(basic.siteType),
+        industry: basic.industry.trim() || undefined,
+        email: basic.email.trim() || undefined,
+        phone: basic.phone.trim() || undefined,
+        addressLine1: basic.addressLine1.trim(),
+        city: basic.city.trim(),
+        state: basic.state.trim(),
+        pincode: basic.pincode.trim(),
+        country: basic.country.trim(),
+        timezone: basic.timezone,
+        currency: basic.currency,
+        status: basic.status,
+        package: basic.package,
+        logoColor: basic.logoColor,
+      },
+      orgSetup: {
+        businessUnits: orgSetup.businessUnits,
+        plants: orgSetup.plants,
+        locations: orgSetup.locations,
+        costCenters: orgSetup.costCenters,
+        profitCenters: orgSetup.profitCenters,
+        departments: orgSetup.departments,
+        subDepartments: orgSetup.subDepartments,
+        designations: orgSetup.designations,
+        grades: orgSetup.grades,
+        employmentTypes: orgSetup.employmentTypes,
+        employeeTypes: orgSetup.employeeTypes,
+      },
+      admin: { fullName: admin.fullName.trim(), email: admin.email.trim(), password: admin.password },
+      config: {
+        attendance,
+        leave: {
+          enabledLeaveTypes: leaveConfig.enabledLeaveTypes.map((name) => ({
+            name,
+            maxDaysPerYear: leaveTypeConfig[name]?.annualQuota ?? 12,
+          })),
+          approvalMode: leaveConfig.approvalMode,
+          carryForwardEnabled: leaveConfig.carryForwardEnabled,
+          carryForwardMaxDays: leaveConfig.carryForwardMaxDays,
+        },
+        payroll: payrollConfig,
+        holiday: {
+          calendarName: holidayConfig.calendarName.trim() || `${basic.name.trim()} Holiday Calendar`,
+          holidays: holidayConfig.holidays,
+        },
+      },
+    };
 
-    setSubmitting(true);
+    const result = await onboardSite(payload);
+    await refreshSites();
+    toast.success(`${result.site.name} onboarded. Site Admin can sign in with ${result.admin.email}.`);
+    setCurrentSiteId(result.site.id);
+    router.push("/sites");
+  }
+
+  /**
+   * Local-only fallback for sessions with no live backend connection (see
+   * lib/api/token-store.ts) — almost every local demo account, since demo
+   * data is never seeded into the backend. Kept exactly as it always was:
+   * a sequence of independent writes to 6 separate local stores, NOT
+   * atomic (no rollback if the Employee/Account step fails partway
+   * through) — the backend path above is what actually fixes that; this
+   * one is deliberately unchanged so today's local demo/dev flow keeps
+   * working byte-for-byte the same.
+   */
+  async function handleCreateSiteLocally() {
     const siteId = `site-${Date.now()}`;
     const today = new Date().toISOString().slice(0, 10);
 
@@ -293,37 +369,46 @@ export function SiteOnboardingWizard() {
     // Department) to keep this wizard simple. Full re-parenting is always
     // available afterward in the Organization module.
     const orgCodes = new Set<string>();
-    const company = createOrgUnit({ type: "Company", name: newSite.name, code: newSite.code, parentId: null, siteId });
+    const company = await createOrgUnit({ type: "Company", name: newSite.name, code: newSite.code, parentId: null, siteId });
     orgCodes.add(newSite.code);
 
-    orgSetup.businessUnits.forEach((name) =>
-      createOrgUnit({ type: "BusinessUnit", name, code: codeFrom(name, orgCodes), parentId: company.id, siteId }),
-    );
-    orgSetup.plants.forEach((name) =>
-      createOrgUnit({ type: "Plant", name, code: codeFrom(name, orgCodes), parentId: company.id, siteId }),
-    );
-    orgSetup.locations.forEach((name) =>
-      createOrgUnit({ type: "Location", name, code: codeFrom(name, orgCodes), parentId: company.id, siteId, locationKind: "Location" }),
-    );
-    orgSetup.costCenters.forEach((name) =>
-      createOrgUnit({ type: "CostCenter", name, code: codeFrom(name, orgCodes), parentId: company.id, siteId }),
-    );
-    orgSetup.profitCenters.forEach((name) =>
-      createOrgUnit({ type: "ProfitCenter", name, code: codeFrom(name, orgCodes), parentId: company.id, siteId }),
-    );
-    const departmentUnits = orgSetup.departments.map((name) =>
-      createOrgUnit({ type: "Department", name, code: codeFrom(name, orgCodes), parentId: company.id, siteId }),
-    );
+    for (const name of orgSetup.businessUnits) {
+      await createOrgUnit({ type: "BusinessUnit", name, code: codeFrom(name, orgCodes), parentId: company.id, siteId });
+    }
+    for (const name of orgSetup.plants) {
+      await createOrgUnit({ type: "Plant", name, code: codeFrom(name, orgCodes), parentId: company.id, siteId });
+    }
+    for (const name of orgSetup.locations) {
+      await createOrgUnit({ type: "Location", name, code: codeFrom(name, orgCodes), parentId: company.id, siteId, locationKind: "Location" });
+    }
+    for (const name of orgSetup.costCenters) {
+      await createOrgUnit({ type: "CostCenter", name, code: codeFrom(name, orgCodes), parentId: company.id, siteId });
+    }
+    for (const name of orgSetup.profitCenters) {
+      await createOrgUnit({ type: "ProfitCenter", name, code: codeFrom(name, orgCodes), parentId: company.id, siteId });
+    }
+    const departmentUnits = [];
+    for (const name of orgSetup.departments) {
+      departmentUnits.push(await createOrgUnit({ type: "Department", name, code: codeFrom(name, orgCodes), parentId: company.id, siteId }));
+    }
     const subDeptParentId = departmentUnits[0]?.id ?? company.id;
-    orgSetup.subDepartments.forEach((name) =>
-      createOrgUnit({ type: "SubDepartment", name, code: codeFrom(name, orgCodes), parentId: subDeptParentId, siteId }),
-    );
+    for (const name of orgSetup.subDepartments) {
+      await createOrgUnit({ type: "SubDepartment", name, code: codeFrom(name, orgCodes), parentId: subDeptParentId, siteId });
+    }
 
     const masterCodes = new Set<string>();
-    orgSetup.designations.forEach((name) => createRecord({ masterType: "Designation", name, code: codeFrom(name, masterCodes), siteId }));
-    orgSetup.grades.forEach((name) => createRecord({ masterType: "JobGrade", name, code: codeFrom(name, masterCodes), siteId }));
-    orgSetup.employmentTypes.forEach((name) => createRecord({ masterType: "EmploymentType", name, code: codeFrom(name, masterCodes), siteId }));
-    orgSetup.employeeTypes.forEach((name) => createRecord({ masterType: "EmployeeType", name, code: codeFrom(name, masterCodes), siteId }));
+    for (const name of orgSetup.designations) {
+      await createRecord({ masterType: "Designation", name, code: codeFrom(name, masterCodes), siteId });
+    }
+    for (const name of orgSetup.grades) {
+      await createRecord({ masterType: "JobGrade", name, code: codeFrom(name, masterCodes), siteId });
+    }
+    for (const name of orgSetup.employmentTypes) {
+      await createRecord({ masterType: "EmploymentType", name, code: codeFrom(name, masterCodes), siteId });
+    }
+    for (const name of orgSetup.employeeTypes) {
+      await createRecord({ masterType: "EmployeeType", name, code: codeFrom(name, masterCodes), siteId });
+    }
 
     // Leave policy — turns Step 4's leave-type toggles into real site-scoped
     // "LeaveType" Master records (see master-data.ts) instead of leaving that
@@ -332,8 +417,8 @@ export function SiteOnboardingWizard() {
     // requires at least one unpaid type to exist; admins can rename/remove
     // it afterward via Masters like any other record.
     const leaveTypeCodes = new Set<string>();
-    leaveConfig.enabledLeaveTypes.forEach((name) =>
-      createRecord({
+    for (const name of leaveConfig.enabledLeaveTypes) {
+      await createRecord({
         masterType: "LeaveType",
         name,
         code: codeFrom(name, leaveTypeCodes),
@@ -346,9 +431,9 @@ export function SiteOnboardingWizard() {
           requiresApproval: true,
           requiresDocument: name === "Sick Leave",
         },
-      }),
-    );
-    createRecord({
+      });
+    }
+    await createRecord({
       masterType: "LeaveType",
       name: "Loss of Pay",
       code: codeFrom("Loss of Pay", leaveTypeCodes),
@@ -387,7 +472,7 @@ export function SiteOnboardingWizard() {
       toast.error('The "Site Admin" role is missing from Access Control — the employee record was created, but no login account was.');
     }
 
-    saveSiteConfig({
+    await saveSiteConfig({
       siteId,
       attendance,
       leave: leaveConfig,
@@ -402,6 +487,28 @@ export function SiteOnboardingWizard() {
     toast.success(`${newSite.name} onboarded. Site Admin can sign in with ${admin.email}.`);
     setCurrentSiteId(siteId);
     router.push("/sites");
+  }
+
+  async function handleCreateSite() {
+    const step1Error = validateStep(1);
+    const step3Error = validateStep(3);
+    if (step1Error || step3Error) {
+      setError(step1Error ?? step3Error);
+      setStep(step1Error ? 1 : 3);
+      return;
+    }
+
+    setSubmitting(true);
+    try {
+      if (isBackendConnected()) {
+        await handleCreateSiteViaBackend();
+      } else {
+        await handleCreateSiteLocally();
+      }
+    } catch (err) {
+      toast.error(err instanceof ApiError ? err.message : "Failed to onboard the site. Please try again.");
+      setSubmitting(false);
+    }
   }
 
   return (

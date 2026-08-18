@@ -23,6 +23,7 @@ import { EmptyRow, TBody, Td, Th, THead, Table, Tr } from "@/components/ui/table
 import { Can } from "@/components/auth/permission-gate";
 import { useMasters } from "@/lib/master-context";
 import { useSite } from "@/lib/site-context";
+import { useToast } from "@/lib/toast-context";
 import { masterTypeConfig, type MasterFieldDef } from "@/lib/master-data";
 import { downloadCsv } from "@/lib/utils";
 import type { MasterAttributes, MasterRecord, MasterType } from "@/lib/types";
@@ -59,10 +60,24 @@ function coerceAttributeValue(field: MasterFieldDef, raw: string): string | numb
 
 export function MasterManager({ type }: { type: MasterType }) {
   const config = masterTypeConfig[type];
-  const { records, auditFor, dependentsCount, createRecord, updateRecord, setRecordStatus, bulkSetStatus, importRecords } =
-    useMasters();
+  const {
+    records,
+    auditFor,
+    dependentsCount,
+    createRecord,
+    updateRecord,
+    setRecordStatus,
+    bulkSetStatus,
+    importRecords,
+    refreshType,
+  } = useMasters();
   const { sites, currentSiteId, isAllSites } = useSite();
   const searchParams = useSearchParams();
+  const toast = useToast();
+
+  useEffect(() => {
+    void refreshType(type);
+  }, [type, currentSiteId, isAllSites, refreshType]);
 
   const [search, setSearch] = useState("");
   const [statusFilter, setStatusFilter] = useState("All Status");
@@ -174,34 +189,42 @@ export function MasterManager({ type }: { type: MasterType }) {
     return attrs;
   }
 
-  function handleCreate(e: FormEvent<HTMLFormElement>) {
+  async function handleCreate(e: FormEvent<HTMLFormElement>) {
     e.preventDefault();
     const form = new FormData(e.currentTarget);
     const siteId = config.scope === "tenant" ? String(form.get("siteId") ?? (isAllSites ? sites[0]?.id : currentSiteId)) : undefined;
-    createRecord({
-      masterType: type,
-      name: String(form.get("name") ?? "").trim(),
-      code: String(form.get("code") ?? "").trim(),
-      siteId,
-      description: String(form.get("description") ?? "").trim() || undefined,
-      attributes: buildAttributesFromForm(form),
-    });
-    setAddOpen(false);
+    try {
+      await createRecord({
+        masterType: type,
+        name: String(form.get("name") ?? "").trim(),
+        code: String(form.get("code") ?? "").trim(),
+        siteId,
+        description: String(form.get("description") ?? "").trim() || undefined,
+        attributes: buildAttributesFromForm(form),
+      });
+      setAddOpen(false);
+    } catch (error) {
+      toast.error(error instanceof Error ? error.message : "Failed to create the record.");
+    }
   }
 
-  function handleEdit(e: FormEvent<HTMLFormElement>) {
+  async function handleEdit(e: FormEvent<HTMLFormElement>) {
     e.preventDefault();
     if (!editRecord) return;
     const form = new FormData(e.currentTarget);
     const siteId = config.scope === "tenant" ? String(form.get("siteId") ?? editRecord.siteId) : undefined;
-    updateRecord(editRecord.id, {
-      name: String(form.get("name") ?? "").trim(),
-      code: String(form.get("code") ?? "").trim(),
-      siteId,
-      description: String(form.get("description") ?? "").trim() || undefined,
-      attributes: buildAttributesFromForm(form),
-    });
-    setEditRecord(null);
+    try {
+      await updateRecord(editRecord.id, {
+        name: String(form.get("name") ?? "").trim(),
+        code: String(form.get("code") ?? "").trim(),
+        siteId,
+        description: String(form.get("description") ?? "").trim() || undefined,
+        attributes: buildAttributesFromForm(form),
+      });
+      setEditRecord(null);
+    } catch (error) {
+      toast.error(error instanceof Error ? error.message : "Failed to update the record.");
+    }
   }
 
   const allOnPageSelected = pageItems.length > 0 && pageItems.every((r) => selected.has(r.id));
@@ -257,8 +280,9 @@ export function MasterManager({ type }: { type: MasterType }) {
               <div className="flex items-center gap-3">
                 <button
                   onClick={() => {
-                    bulkSetStatus(Array.from(selected), "Active");
-                    setSelected(new Set());
+                    bulkSetStatus(Array.from(selected), "Active")
+                      .then(() => setSelected(new Set()))
+                      .catch((error: unknown) => toast.error(error instanceof Error ? error.message : "Failed to activate the selected records."));
                   }}
                   className="font-medium text-indigo-600 hover:underline dark:text-indigo-400"
                 >
@@ -266,8 +290,9 @@ export function MasterManager({ type }: { type: MasterType }) {
                 </button>
                 <button
                   onClick={() => {
-                    bulkSetStatus(Array.from(selected), "Inactive");
-                    setSelected(new Set());
+                    bulkSetStatus(Array.from(selected), "Inactive")
+                      .then(() => setSelected(new Set()))
+                      .catch((error: unknown) => toast.error(error instanceof Error ? error.message : "Failed to deactivate the selected records."));
                   }}
                   className="font-medium text-rose-600 hover:underline dark:text-rose-400"
                 >
@@ -352,7 +377,14 @@ export function MasterManager({ type }: { type: MasterType }) {
                           Deactivate
                         </button>
                       ) : (
-                        <button onClick={() => setRecordStatus(rec.id, "Active")} className="text-sm font-medium text-emerald-600 hover:underline dark:text-emerald-400">
+                        <button
+                          onClick={() => {
+                            setRecordStatus(rec.id, "Active").catch((error: unknown) =>
+                              toast.error(error instanceof Error ? error.message : "Failed to activate the record."),
+                            );
+                          }}
+                          className="text-sm font-medium text-emerald-600 hover:underline dark:text-emerald-400"
+                        >
                           Activate
                         </button>
                       )}
@@ -502,8 +534,9 @@ export function MasterManager({ type }: { type: MasterType }) {
               </Button>
               <Button
                 onClick={() => {
-                  setRecordStatus(deactivateTarget.id, "Inactive");
-                  setDeactivateTarget(null);
+                  setRecordStatus(deactivateTarget.id, "Inactive")
+                    .then(() => setDeactivateTarget(null))
+                    .catch((error: unknown) => toast.error(error instanceof Error ? error.message : "Failed to deactivate the record."));
                 }}
               >
                 Deactivate

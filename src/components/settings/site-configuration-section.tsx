@@ -44,7 +44,7 @@ function emptyConfig(siteId: string): SiteOnboardingConfig {
 export function SiteConfigurationSection() {
   const { canFeature } = useAccessControl();
   const { sites, mappedSites, isSuperAdmin, currentSiteId } = useSite();
-  const { configForSite, saveSiteConfig } = useSiteConfig();
+  const { configForSite, saveSiteConfig, refreshConfig } = useSiteConfig();
   const canEdit = canFeature("settings.organization", "edit") || canFeature("organization.structure", "edit");
 
   const scopedSites = isSuperAdmin ? sites : mappedSites;
@@ -55,6 +55,10 @@ export function SiteConfigurationSection() {
   const [newHolidayDate, setNewHolidayDate] = useState("");
 
   useEffect(() => {
+    void refreshConfig(siteId);
+  }, [siteId, refreshConfig]);
+
+  useEffect(() => {
     setForm(configForSite(siteId) ?? emptyConfig(siteId));
   }, [siteId, configForSite]);
 
@@ -62,9 +66,9 @@ export function SiteConfigurationSection() {
     return list.includes(value) ? list.filter((v) => v !== value) : [...list, value];
   }
 
-  function handleSave(e: FormEvent<HTMLFormElement>) {
+  async function handleSave(e: FormEvent<HTMLFormElement>) {
     e.preventDefault();
-    saveSiteConfig({ ...form, siteId, updatedOn: new Date().toISOString().slice(0, 10) });
+    await saveSiteConfig({ ...form, siteId, updatedOn: new Date().toISOString().slice(0, 10) });
     setSaved(true);
     setTimeout(() => setSaved(false), 2000);
   }

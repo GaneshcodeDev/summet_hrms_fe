@@ -12,6 +12,15 @@ import { masterAuditStore, masterRecordsStore, logMasterAudit } from "@/lib/mast
 import { masterTypeConfig } from "@/lib/master-data";
 import { employees } from "@/lib/mock-data";
 import { useAccessControl } from "@/lib/access-control-context";
+import { useSite } from "@/lib/site-context";
+import { apiMasterRecordToMasterRecord } from "@/lib/api/mappers";
+import {
+  createMasterRecord as apiCreateMasterRecord,
+  listMasterRecords,
+  setMasterRecordStatus as apiSetMasterRecordStatus,
+  updateMasterRecord as apiUpdateMasterRecord,
+} from "@/lib/api/masters-api";
+import { isBackendConnected } from "@/lib/api/token-store";
 import type { AccountStatus, MasterAttributes, MasterAuditEntry, MasterRecord, MasterType } from "@/lib/types";
 
 type MasterDraft = {
@@ -38,11 +47,14 @@ interface MasterContextValue {
   recordsOfType: (type: MasterType) => MasterRecord[];
   auditFor: (recordId: string) => MasterAuditEntry[];
   dependentsCount: (record: MasterRecord) => number;
-  createRecord: (input: MasterDraft) => MasterRecord;
-  updateRecord: (id: string, patch: MasterEditable) => void;
-  setRecordStatus: (id: string, status: AccountStatus) => void;
-  bulkSetStatus: (ids: string[], status: AccountStatus) => void;
+  createRecord: (input: MasterDraft) => Promise<MasterRecord>;
+  updateRecord: (id: string, patch: MasterEditable) => Promise<void>;
+  setRecordStatus: (id: string, status: AccountStatus) => Promise<void>;
+  bulkSetStatus: (ids: string[], status: AccountStatus) => Promise<void>;
+  /** CSV bulk import stays local-only — the backend has no bulk-import endpoint this phase. */
   importRecords: (masterType: MasterType, siteId: string | undefined, rows: ImportRow[]) => number;
+  /** Call when a page starts viewing a given type — fetches it from the API when connected (see docs/architecture-audit.md). */
+  refreshType: (type: MasterType) => Promise<void>;
 }
 
 const MasterContext = createContext<MasterContextValue | undefined>(undefined);
@@ -58,6 +70,7 @@ const editableFields: (keyof MasterEditable)[] = ["name", "code", "siteId", "des
 
 export function MasterProvider({ children }: { children: ReactNode }) {
   const { currentUser } = useAccessControl();
+  const { currentSiteId, isAllSites } = useSite();
 
   const records = useSyncExternalStore(
     masterRecordsStore.subscribe,
@@ -71,6 +84,23 @@ export function MasterProvider({ children }: { children: ReactNode }) {
   );
 
   const recordsOfType = useCallback((type: MasterType) => records.filter((r) => r.masterType === type), [records]);
+
+  const refreshType = useCallback(
+    async (type: MasterType) => {
+      if (!isBackendConnected()) return;
+      const scope = masterTypeConfig[type].scope;
+      const siteId = scope === "tenant" ? (isAllSites ? undefined : currentSiteId) : undefined;
+      if (scope === "tenant" && !siteId) return; // no single site selected — nothing valid to fetch
+
+      const apiRecords = await listMasterRecords(type, siteId);
+      const mapped = apiRecords.map(apiMasterRecordToMasterRecord);
+      masterRecordsStore.set([
+        ...masterRecordsStore.getSnapshot().filter((r) => !(r.masterType === type && r.siteId === siteId)),
+        ...mapped,
+      ]);
+    },
+    [currentSiteId, isAllSites],
+  );
 
   const auditFor = useCallback(
     (recordId: string) => auditEntries.filter((e) => e.recordId === recordId),
@@ -97,21 +127,27 @@ export function MasterProvider({ children }: { children: ReactNode }) {
   );
 
   const createRecord = useCallback(
-    (input: MasterDraft) => {
-      const id = `${slugify(input.masterType)}-${slugify(input.name)}-${Date.now().toString(36)}`;
-      const now = new Date().toISOString();
-      const newRecord: MasterRecord = {
-        id,
-        status: "Active",
-        attributes: {},
-        createdOn: now,
-        updatedOn: now,
-        ...input,
-      };
+    async (input: MasterDraft) => {
+      let newRecord: MasterRecord;
+      if (isBackendConnected()) {
+        const created = await apiCreateMasterRecord({
+          masterType: input.masterType,
+          name: input.name,
+          code: input.code,
+          siteId: input.siteId,
+          description: input.description,
+          attributes: input.attributes,
+        });
+        newRecord = apiMasterRecordToMasterRecord(created);
+      } else {
+        const id = `${slugify(input.masterType)}-${slugify(input.name)}-${Date.now().toString(36)}`;
+        const now = new Date().toISOString();
+        newRecord = { id, status: "Active", attributes: {}, createdOn: now, updatedOn: now, ...input };
+      }
       masterRecordsStore.update((rs) => [...rs, newRecord]);
       logMasterAudit({
         masterType: input.masterType,
-        recordId: id,
+        recordId: newRecord.id,
         recordName: input.name,
         action: "created",
         actorName: currentUser.name,
@@ -123,14 +159,27 @@ export function MasterProvider({ children }: { children: ReactNode }) {
   );
 
   const updateRecord = useCallback(
-    (id: string, patch: MasterEditable) => {
+    async (id: string, patch: MasterEditable) => {
       const existing = masterRecordsStore.getSnapshot().find((r) => r.id === id);
       if (!existing) return;
       const changed = editableFields.filter((field) => field in patch && patch[field] !== existing[field]);
       if (changed.length === 0) return;
-      masterRecordsStore.update((rs) =>
-        rs.map((r) => (r.id === id ? { ...r, ...patch, updatedOn: new Date().toISOString() } : r)),
-      );
+
+      if (isBackendConnected()) {
+        const updated = await apiUpdateMasterRecord(id, {
+          name: patch.name,
+          code: patch.code,
+          description: patch.description,
+          attributes: patch.attributes,
+        });
+        const mapped = apiMasterRecordToMasterRecord(updated);
+        masterRecordsStore.set(masterRecordsStore.getSnapshot().map((r) => (r.id === id ? mapped : r)));
+      } else {
+        masterRecordsStore.update((rs) =>
+          rs.map((r) => (r.id === id ? { ...r, ...patch, updatedOn: new Date().toISOString() } : r)),
+        );
+      }
+
       logMasterAudit({
         masterType: existing.masterType,
         recordId: id,
@@ -144,12 +193,20 @@ export function MasterProvider({ children }: { children: ReactNode }) {
   );
 
   const setRecordStatus = useCallback(
-    (id: string, status: AccountStatus) => {
+    async (id: string, status: AccountStatus) => {
       const existing = masterRecordsStore.getSnapshot().find((r) => r.id === id);
       if (!existing || existing.status === status) return;
-      masterRecordsStore.update((rs) =>
-        rs.map((r) => (r.id === id ? { ...r, status, updatedOn: new Date().toISOString() } : r)),
-      );
+
+      if (isBackendConnected()) {
+        const updated = await apiSetMasterRecordStatus(id, status);
+        const mapped = apiMasterRecordToMasterRecord(updated);
+        masterRecordsStore.set(masterRecordsStore.getSnapshot().map((r) => (r.id === id ? mapped : r)));
+      } else {
+        masterRecordsStore.update((rs) =>
+          rs.map((r) => (r.id === id ? { ...r, status, updatedOn: new Date().toISOString() } : r)),
+        );
+      }
+
       logMasterAudit({
         masterType: existing.masterType,
         recordId: id,
@@ -163,8 +220,10 @@ export function MasterProvider({ children }: { children: ReactNode }) {
   );
 
   const bulkSetStatus = useCallback(
-    (ids: string[], status: AccountStatus) => {
-      ids.forEach((id) => setRecordStatus(id, status));
+    async (ids: string[], status: AccountStatus) => {
+      for (const id of ids) {
+        await setRecordStatus(id, status);
+      }
     },
     [setRecordStatus],
   );
@@ -211,8 +270,21 @@ export function MasterProvider({ children }: { children: ReactNode }) {
       setRecordStatus,
       bulkSetStatus,
       importRecords,
+      refreshType,
     }),
-    [records, auditEntries, recordsOfType, auditFor, dependentsCount, createRecord, updateRecord, setRecordStatus, bulkSetStatus, importRecords],
+    [
+      records,
+      auditEntries,
+      recordsOfType,
+      auditFor,
+      dependentsCount,
+      createRecord,
+      updateRecord,
+      setRecordStatus,
+      bulkSetStatus,
+      importRecords,
+      refreshType,
+    ],
   );
 
   return <MasterContext.Provider value={value}>{children}</MasterContext.Provider>;

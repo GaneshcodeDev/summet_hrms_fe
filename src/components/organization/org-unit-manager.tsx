@@ -14,6 +14,7 @@ import { EmptyRow, TBody, Td, Th, THead, Table, Tr } from "@/components/ui/table
 import { Can } from "@/components/auth/permission-gate";
 import { useOrg } from "@/lib/org-context";
 import { useSite } from "@/lib/site-context";
+import { useToast } from "@/lib/toast-context";
 import { employees } from "@/lib/mock-data";
 import { orgUnitTypeConfig } from "@/lib/org-data";
 import { downloadCsv } from "@/lib/utils";
@@ -50,6 +51,7 @@ export function OrgUnitManager({ type }: { type: OrgUnitType }) {
   const config = orgUnitTypeConfig[type];
   const { orgUnits, ancestorsOf, descendantIdsOf, auditFor, createOrgUnit, updateOrgUnit, setOrgUnitStatus } = useOrg();
   const { sites, currentSiteId, isAllSites } = useSite();
+  const toast = useToast();
   const searchParams = useSearchParams();
 
   const [search, setSearch] = useState("");
@@ -147,7 +149,7 @@ export function OrgUnitManager({ type }: { type: OrgUnitType }) {
     );
   }
 
-  function handleCreate(input: {
+  async function handleCreate(input: {
     name: string;
     code: string;
     siteId: string;
@@ -156,11 +158,15 @@ export function OrgUnitManager({ type }: { type: OrgUnitType }) {
     description?: string;
     locationKind?: OrgUnit["locationKind"];
   }) {
-    createOrgUnit({ type, ...input });
-    setAddOpen(false);
+    try {
+      await createOrgUnit({ type, ...input });
+      setAddOpen(false);
+    } catch (error) {
+      toast.error(error instanceof Error ? error.message : "Failed to create the organization unit.");
+    }
   }
 
-  function handleEdit(input: {
+  async function handleEdit(input: {
     name: string;
     code: string;
     siteId: string;
@@ -170,8 +176,12 @@ export function OrgUnitManager({ type }: { type: OrgUnitType }) {
     locationKind?: OrgUnit["locationKind"];
   }) {
     if (!editUnit) return;
-    updateOrgUnit(editUnit.id, input);
-    setEditUnit(null);
+    try {
+      await updateOrgUnit(editUnit.id, input);
+      setEditUnit(null);
+    } catch (error) {
+      toast.error(error instanceof Error ? error.message : "Failed to update the organization unit.");
+    }
   }
 
   return (
@@ -281,7 +291,14 @@ export function OrgUnitManager({ type }: { type: OrgUnitType }) {
                           Deactivate
                         </button>
                       ) : (
-                        <button onClick={() => setOrgUnitStatus(unit.id, "Active")} className="text-sm font-medium text-emerald-600 hover:underline dark:text-emerald-400">
+                        <button
+                          onClick={() => {
+                            setOrgUnitStatus(unit.id, "Active").catch((error: unknown) =>
+                              toast.error(error instanceof Error ? error.message : "Failed to activate the unit."),
+                            );
+                          }}
+                          className="text-sm font-medium text-emerald-600 hover:underline dark:text-emerald-400"
+                        >
                           Activate
                         </button>
                       )}
@@ -444,8 +461,9 @@ export function OrgUnitManager({ type }: { type: OrgUnitType }) {
               </Button>
               <Button
                 onClick={() => {
-                  setOrgUnitStatus(deactivateTarget.id, "Inactive");
-                  setDeactivateTarget(null);
+                  setOrgUnitStatus(deactivateTarget.id, "Inactive")
+                    .then(() => setDeactivateTarget(null))
+                    .catch((error: unknown) => toast.error(error instanceof Error ? error.message : "Failed to deactivate the unit."));
                 }}
               >
                 Deactivate

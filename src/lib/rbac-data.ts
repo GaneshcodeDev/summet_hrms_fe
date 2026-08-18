@@ -429,6 +429,33 @@ export const superAdminAccount: UserAccount = {
   createdOn: "2018-01-10",
 };
 
+export const BACKEND_BRIDGE_ACCOUNT_ID = "account-backend-bridge";
+
+/**
+ * Phase 18B: logging in tries the real backend (summet_hrms_be) first and
+ * falls through to this local mock system on failure (see lib/auth.ts).
+ * Almost no local demo account exists as a real backend User — seeding
+ * demo/business data into the backend is explicitly out of scope — so this
+ * one extra default account exists purely so the bridging path is actually
+ * exercisable out of the box: its email/password match the platform Super
+ * Admin seeded by `summet_hrms_be`'s `prisma/seed.ts` (see that repo's
+ * README), so signing in with these credentials succeeds on BOTH sides —
+ * real Sites/Organization/Masters data from the API, everything else
+ * (Employees, Attendance, ...) from local mock data as always.
+ */
+export const backendBridgeAccount: UserAccount = {
+  id: BACKEND_BRIDGE_ACCOUNT_ID,
+  employeeId: "BACKENDBRIDGE",
+  name: "Platform Super Admin",
+  email: "superadmin@summet-hrms.dev",
+  roleIds: ["role-super-admin"],
+  status: "Active",
+  siteIds: [],
+  passwordHash: hashPassword("ChangeMe@123"),
+  failedLoginAttempts: 0,
+  createdOn: "2018-01-10",
+};
+
 const roleByEmployeeId: Record<string, string> = {
   EMP001: "role-super-admin",
   EMP002: "role-employee",
