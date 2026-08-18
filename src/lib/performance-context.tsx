@@ -132,7 +132,7 @@ interface PerformanceContextValue {
   createAppraisal: (input: CreateAppraisalInput) => ActionResult & { appraisal?: AppraisalDecision };
   submitAppraisalForApproval: (id: string) => ActionResult;
   decideAppraisal: (id: string, decision: "Approved" | "Rejected", comment?: string) => ActionResult;
-  applyAppraisal: (id: string) => ActionResult;
+  applyAppraisal: (id: string) => Promise<ActionResult>;
 
   auditEntries: PerformanceAuditEntry[];
 }
@@ -622,7 +622,7 @@ export function PerformanceProvider({ children }: { children: ReactNode }) {
   );
 
   const applyAppraisal = useCallback(
-    (id: string): ActionResult => {
+    async (id: string): Promise<ActionResult> => {
       if (!canManageAppraisal) return { ok: false, message: "You're not authorized to apply appraisal decisions." };
       const appraisal = appraisalDecisionsStore.getSnapshot().find((a) => a.id === id);
       if (!appraisal) return { ok: false, message: "Appraisal not found." };
@@ -650,7 +650,7 @@ export function PerformanceProvider({ children }: { children: ReactNode }) {
       // Promotion: reuses Phase 12's Employee Lifecycle promotion — no
       // duplicate implementation (section 18).
       if (appraisal.promotion && (appraisal.proposedDesignationId || appraisal.proposedGradeId)) {
-        const promoResult = promoteEmployee(employee.id, {
+        const promoResult = await promoteEmployee(employee.id, {
           designationId: appraisal.proposedDesignationId,
           gradeId: appraisal.proposedGradeId,
           effectiveDate: appraisal.effectiveDate,

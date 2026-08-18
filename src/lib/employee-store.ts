@@ -2,7 +2,15 @@
 
 import { createLocalStorageStore } from "@/lib/local-store";
 import { employees as seedEmployees, getEmployeeById as resolveSeedEmployee } from "@/lib/mock-data";
-import type { Employee, EmployeeBankDetail, EmployeeDocumentRecord, UserAccount } from "@/lib/types";
+import type {
+  EmergencyContact,
+  Employee,
+  EmployeeBankDetail,
+  EmployeeDocumentRecord,
+  Nominee,
+  UserAccount,
+  WorkExperience,
+} from "@/lib/types";
 
 /**
  * Plain (non-React) persistence for the employee directory, mirroring
@@ -82,6 +90,40 @@ export function findBankDetail(employeeId: string): EmployeeBankDetail | undefin
 
 export function documentsForEmployee(employeeId: string): EmployeeDocumentRecord[] {
   return employeeDocumentsStore.getSnapshot().filter((d) => d.employeeId === employeeId);
+}
+
+/**
+ * Emergency contacts / nominees / previous experience — real backend
+ * models as of Phase 18C (EmployeeEmergencyContact/EmployeeNominee/
+ * EmployeePreviousExperience), no longer inline arrays on Employee itself
+ * (which is how they worked pre-18C). Brought into the SAME "separate
+ * store, fetched per-employee, synchronous lookup" shape bank/documents
+ * already used, rather than inventing a different pattern for these three.
+ */
+export type StoredEmergencyContact = EmergencyContact & { employeeId: string };
+export type StoredNominee = Nominee & { employeeId: string };
+export type StoredWorkExperience = WorkExperience & { employeeId: string };
+
+export const emergencyContactsStore = createLocalStorageStore<StoredEmergencyContact[]>(
+  "hrms_employee_emergency_contacts",
+  [],
+);
+export const nomineesStore = createLocalStorageStore<StoredNominee[]>("hrms_employee_nominees", []);
+export const previousExperienceStore = createLocalStorageStore<StoredWorkExperience[]>(
+  "hrms_employee_previous_experience",
+  [],
+);
+
+export function emergencyContactsForEmployee(employeeId: string): StoredEmergencyContact[] {
+  return emergencyContactsStore.getSnapshot().filter((c) => c.employeeId === employeeId);
+}
+
+export function nomineesForEmployee(employeeId: string): StoredNominee[] {
+  return nomineesStore.getSnapshot().filter((n) => n.employeeId === employeeId);
+}
+
+export function previousExperienceForEmployee(employeeId: string): StoredWorkExperience[] {
+  return previousExperienceStore.getSnapshot().filter((x) => x.employeeId === employeeId);
 }
 
 /**

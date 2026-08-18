@@ -346,6 +346,16 @@ function SiteAttendanceView() {
     if (result.ok) setModalTarget(null);
   }
 
+  async function handleMark(input: MarkAttendanceInput) {
+    handleSaved(await markAttendance(input));
+  }
+  async function handleUpdate(
+    id: string,
+    patch: Parameters<ReturnType<typeof useAttendance>["updateAttendanceRecord"]>[1],
+  ) {
+    handleSaved(await updateAttendanceRecord(id, patch));
+  }
+
   return (
     <div className="space-y-4">
       <SummaryCards summary={summary} totalEmployees={siteEmployees.length} />
@@ -480,8 +490,8 @@ function SiteAttendanceView() {
         canMark={canMark}
         canEdit={canEdit}
         onClose={() => setModalTarget(null)}
-        onMark={(input) => handleSaved(markAttendance(input))}
-        onUpdate={(id, patch) => handleSaved(updateAttendanceRecord(id, patch))}
+        onMark={handleMark}
+        onUpdate={handleUpdate}
       />
     </div>
   );
@@ -509,8 +519,8 @@ function MarkAttendanceModal({
   canMark: boolean;
   canEdit: boolean;
   onClose: () => void;
-  onMark: (input: MarkAttendanceInput) => void;
-  onUpdate: (id: string, patch: Parameters<ReturnType<typeof useAttendance>["updateAttendanceRecord"]>[1]) => void;
+  onMark: (input: MarkAttendanceInput) => Promise<void>;
+  onUpdate: (id: string, patch: Parameters<ReturnType<typeof useAttendance>["updateAttendanceRecord"]>[1]) => Promise<void>;
 }) {
   if (!target) return null;
   const { employee, record } = target;
@@ -528,7 +538,7 @@ function MarkAttendanceModal({
     const shift = shifts.find((s) => s.id === shiftId);
 
     if (isEdit && record) {
-      onUpdate(record.id, {
+      void onUpdate(record.id, {
         status,
         punchIn: punchIn || undefined,
         punchOut: punchOut || undefined,
@@ -539,7 +549,7 @@ function MarkAttendanceModal({
         gracePeriodMinutes,
       });
     } else {
-      onMark({
+      void onMark({
         employeeId: employee.employeeId,
         siteId,
         date,
@@ -628,10 +638,11 @@ function RegularizationView({ canDecideAny }: { canDecideAny: boolean }) {
     ...(canDecideAny ? [{ id: "team", label: "Team Requests" }] : []),
   ];
 
-  function handleApply(e: FormEvent<HTMLFormElement>) {
+  async function handleApply(e: FormEvent<HTMLFormElement>) {
     e.preventDefault();
     const form = new FormData(e.currentTarget);
-    const result = applyRegularization({
+    const target = e.currentTarget;
+    const result = await applyRegularization({
       date: String(form.get("date")),
       currentStatus: String(form.get("currentStatus")) as AttendanceStatus,
       requestedStatus: String(form.get("requestedStatus")) as AttendanceStatus,
@@ -642,26 +653,26 @@ function RegularizationView({ canDecideAny }: { canDecideAny: boolean }) {
     (result.ok ? toast.success : toast.error)(result.message);
     if (result.ok) {
       setModalOpen(false);
-      e.currentTarget.reset();
+      target.reset();
     }
   }
 
-  function handleApprove(request: AttendanceRegularization) {
-    const result = approveRegularization(request.id);
+  async function handleApprove(request: AttendanceRegularization) {
+    const result = await approveRegularization(request.id);
     (result.ok ? toast.success : toast.error)(result.message);
   }
 
-  function handleRejectSubmit(e: FormEvent<HTMLFormElement>) {
+  async function handleRejectSubmit(e: FormEvent<HTMLFormElement>) {
     e.preventDefault();
     if (!rejectTarget) return;
     const form = new FormData(e.currentTarget);
-    const result = rejectRegularization(rejectTarget.id, String(form.get("reason") ?? ""));
+    const result = await rejectRegularization(rejectTarget.id, String(form.get("reason") ?? ""));
     (result.ok ? toast.success : toast.error)(result.message);
     if (result.ok) setRejectTarget(null);
   }
 
-  function handleCancel(request: AttendanceRegularization) {
-    const result = cancelRegularization(request.id);
+  async function handleCancel(request: AttendanceRegularization) {
+    const result = await cancelRegularization(request.id);
     (result.ok ? toast.success : toast.error)(result.message);
   }
 

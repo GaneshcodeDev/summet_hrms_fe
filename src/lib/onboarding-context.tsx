@@ -77,7 +77,7 @@ interface OnboardingContextValue {
   verifyDocument: (caseId: string, docId: string, status: DocumentStatus, reason?: string) => ActionResult;
   sendForSignature: (caseId: string, docId: string) => ActionResult;
   markSigned: (caseId: string, docId: string) => ActionResult;
-  completeOnboarding: (caseId: string) => ActionResult;
+  completeOnboarding: (caseId: string) => Promise<ActionResult>;
   cancelOnboarding: (caseId: string, reason: string) => ActionResult;
 }
 
@@ -357,7 +357,7 @@ export function OnboardingProvider({ children }: { children: ReactNode }) {
   );
 
   const completeOnboarding = useCallback(
-    (caseId: string): ActionResult => {
+    async (caseId: string): Promise<ActionResult> => {
       if (!canManage) return { ok: false, message: "You're not authorized to complete onboarding." };
       const record = onboardingCasesStore.getSnapshot().find((c) => c.id === caseId);
       if (!record) return { ok: false, message: "Onboarding case not found." };
@@ -373,7 +373,7 @@ export function OnboardingProvider({ children }: { children: ReactNode }) {
       let employeeId = record.employeeId;
       let salaryWarning: string | undefined;
       if (!employeeId) {
-        const created = createEmployee({
+        const created = await createEmployee({
           name: record.candidateName,
           email: record.candidateEmail,
           phone: record.candidatePhone,

@@ -1,6 +1,6 @@
 "use client";
 
-import { FormEvent, Suspense, use, useMemo, useState } from "react";
+import { FormEvent, Suspense, use, useEffect, useMemo, useState } from "react";
 import { notFound, useSearchParams } from "next/navigation";
 import Link from "next/link";
 import {
@@ -128,6 +128,16 @@ function EmployeeProfileClient({ id }: { id: string }) {
     addDocument,
     setDocumentStatus,
     updateEmployee,
+    refreshEmployeeProfileRecords,
+    emergencyContactsFor,
+    addEmergencyContact,
+    removeEmergencyContact,
+    nomineesFor,
+    addNominee,
+    removeNominee,
+    previousExperienceFor,
+    addPreviousExperience,
+    removePreviousExperience,
   } = useEmployees();
   const { requestsFor, leaveTypesForSite, balanceSummaryFor } = useLeave();
   const { recordsForEmployee } = useAttendance();
@@ -156,6 +166,14 @@ function EmployeeProfileClient({ id }: { id: string }) {
   if (!isOwnProfile && !isSuperAdmin && !viewerMappedSites.some((s) => s.id === employee.siteId)) {
     notFound();
   }
+
+  // Bank/documents/emergency contacts/nominees/previous experience are
+  // per-employee fetches (never bulk-listed) — hydrate them once this
+  // specific profile is being viewed.
+  useEffect(() => {
+    void refreshEmployeeProfileRecords(employee.id);
+  }, [employee.id, refreshEmployeeProfileRecords]);
+
   const canViewBank = isOwnProfile || canFeature("payroll.bank", "view");
   const canViewSalary = isOwnProfile || canFeature("payroll.salary", "view");
   const canViewDocuments = isOwnProfile || canFeature("employees.documents", "view") || canManageDocuments;
@@ -231,8 +249,11 @@ function EmployeeProfileClient({ id }: { id: string }) {
     .map((siteId) => sites.find((s) => s.id === siteId))
     .filter((s): s is NonNullable<typeof s> => Boolean(s));
 
-  const documents = documentsFor(employee.employeeId);
-  const bank = bankDetailFor(employee.employeeId);
+  // Bank/documents are Phase 18C backend resources keyed by the internal
+  // Employee.id (UUID), unlike Salary/Leave below which are still
+  // un-migrated and key by the display employeeId code (spec §18).
+  const documents = documentsFor(employee.id);
+  const bank = bankDetailFor(employee.id);
   const { salaryStructureFor, salaryHistoryFor, canManageSalary, defaultSalaryLinesFor, saveSalaryStructure } = usePayroll();
   const salary = salaryStructureFor(employee.employeeId);
   const employeeLeaves = requestsFor(employee.employeeId);
@@ -480,11 +501,23 @@ function EmployeeProfileClient({ id }: { id: string }) {
             )}
 
             {active === "emergency" && canViewProfileDetail && (
-              <EmergencyTab employee={employee} canEdit={canEditPersonalDetail} updateEmployee={updateEmployee} />
+              <EmergencyTab
+                employee={employee}
+                canEdit={canEditPersonalDetail}
+                contacts={emergencyContactsFor(employee.id)}
+                addEmergencyContact={addEmergencyContact}
+                removeEmergencyContact={removeEmergencyContact}
+              />
             )}
 
             {active === "nominee" && canViewProfileDetail && (
-              <NomineeTab employee={employee} canEdit={canEditPersonalDetail} updateEmployee={updateEmployee} />
+              <NomineeTab
+                employee={employee}
+                canEdit={canEditPersonalDetail}
+                nominees={nomineesFor(employee.id)}
+                addNominee={addNominee}
+                removeNominee={removeNominee}
+              />
             )}
 
             {active === "salary" && canViewSalary && (
@@ -656,7 +689,13 @@ function EmployeeProfileClient({ id }: { id: string }) {
             )}
 
             {active === "experience" && canViewProfileDetail && (
-              <ExperienceTab employee={employee} canEdit={canEditPersonalDetail} updateEmployee={updateEmployee} />
+              <ExperienceTab
+                employee={employee}
+                canEdit={canEditPersonalDetail}
+                experience={previousExperienceFor(employee.id)}
+                addPreviousExperience={addPreviousExperience}
+                removePreviousExperience={removePreviousExperience}
+              />
             )}
 
             {active === "performance" && canViewEmployeePerformance && (
@@ -931,13 +970,13 @@ function ConfirmEmployeeModal({
 }: {
   employee: Employee;
   onClose: () => void;
-  confirmEmployee: (employeeId: string, input: { confirmationDate: string; comment?: string }) => ActionResult;
+  confirmEmployee: (employeeId: string, input: { confirmationDate: string; comment?: string }) => Promise<ActionResult>;
 }) {
   const toast = useToast();
-  function handleSubmit(e: FormEvent<HTMLFormElement>) {
+  async function handleSubmit(e: FormEvent<HTMLFormElement>) {
     e.preventDefault();
     const form = new FormData(e.currentTarget);
-    const result = confirmEmployee(employee.id, {
+    const result = await confirmEmployee(employee.id, {
       confirmationDate: String(form.get("confirmationDate") ?? todayStr()),
       comment: String(form.get("comment") ?? "").trim() || undefined,
     });
@@ -972,7 +1011,7 @@ function TransferEmployeeModal({
 }: {
   employee: Employee;
   onClose: () => void;
-  transferEmployee: (employeeId: string, input: Record<string, unknown> & { effectiveDate: string }) => ActionResult;
+  transferEmployee: (employeeId: string, input: Record<string, unknown> & { effectiveDate: string }) => Promise<ActionResult>;
   canTransferCrossSite: boolean;
 }) {
   const toast = useToast();
@@ -987,11 +1026,11 @@ function TransferEmployeeModal({
   const siteLocations = orgUnits.filter((u) => u.type === "Location" && u.siteId === targetSiteId);
   const siteManagers = employees.filter((e) => e.siteId === targetSiteId && e.employeeId !== employee.employeeId && e.status === "Active");
 
-  function handleSubmit(e: FormEvent<HTMLFormElement>) {
+  async function handleSubmit(e: FormEvent<HTMLFormElement>) {
     e.preventDefault();
     const form = new FormData(e.currentTarget);
     const optional = (key: string) => String(form.get(key) ?? "").trim() || undefined;
-    const result = transferEmployee(employee.id, {
+    const result = await transferEmployee(employee.id, {
       siteId: targetSiteId !== employee.siteId ? targetSiteId : undefined,
       departmentId: optional("departmentId"),
       subDepartmentId: optional("subDepartmentId"),
@@ -1096,17 +1135,17 @@ function PromoteEmployeeModal({
 }: {
   employee: Employee;
   onClose: () => void;
-  promoteEmployee: (employeeId: string, input: Record<string, unknown> & { effectiveDate: string }) => ActionResult;
+  promoteEmployee: (employeeId: string, input: Record<string, unknown> & { effectiveDate: string }) => Promise<ActionResult>;
 }) {
   const toast = useToast();
   const { recordsOfType } = useMasters();
   const designations = recordsOfType("Designation").filter((d) => !d.siteId || d.siteId === employee.siteId);
   const grades = recordsOfType("JobGrade").filter((g) => !g.siteId || g.siteId === employee.siteId);
 
-  function handleSubmit(e: FormEvent<HTMLFormElement>) {
+  async function handleSubmit(e: FormEvent<HTMLFormElement>) {
     e.preventDefault();
     const form = new FormData(e.currentTarget);
-    const result = promoteEmployee(employee.id, {
+    const result = await promoteEmployee(employee.id, {
       designationId: String(form.get("designationId") ?? "") || undefined,
       gradeId: String(form.get("gradeId") ?? "") || undefined,
       effectiveDate: String(form.get("effectiveDate") ?? todayStr()),
@@ -1166,16 +1205,16 @@ function ChangeManagerModal({
 }: {
   employee: Employee;
   onClose: () => void;
-  changeManager: (employeeId: string, newManagerEmployeeId: string, comment?: string) => ActionResult;
+  changeManager: (employeeId: string, newManagerEmployeeId: string, comment?: string) => Promise<ActionResult>;
 }) {
   const toast = useToast();
   const { employees } = useEmployees();
   const candidates = employees.filter((e) => e.siteId === employee.siteId && e.employeeId !== employee.employeeId && e.status === "Active");
 
-  function handleSubmit(e: FormEvent<HTMLFormElement>) {
+  async function handleSubmit(e: FormEvent<HTMLFormElement>) {
     e.preventDefault();
     const form = new FormData(e.currentTarget);
-    const result = changeManager(employee.id, String(form.get("managerId") ?? ""), String(form.get("comment") ?? "").trim() || undefined);
+    const result = await changeManager(employee.id, String(form.get("managerId") ?? ""), String(form.get("comment") ?? "").trim() || undefined);
     (result.ok ? toast.success : toast.error)(result.message);
     if (result.ok) onClose();
   }
@@ -1216,16 +1255,16 @@ function ChangeShiftModal({
 }: {
   employee: Employee;
   onClose: () => void;
-  changeShift: (employeeId: string, newShiftId: string, effectiveDate: string, comment?: string) => ActionResult;
+  changeShift: (employeeId: string, newShiftId: string, effectiveDate: string, comment?: string) => Promise<ActionResult>;
 }) {
   const toast = useToast();
   const { recordsOfType } = useMasters();
   const shifts = recordsOfType("Shift").filter((s) => !s.siteId || s.siteId === employee.siteId);
 
-  function handleSubmit(e: FormEvent<HTMLFormElement>) {
+  async function handleSubmit(e: FormEvent<HTMLFormElement>) {
     e.preventDefault();
     const form = new FormData(e.currentTarget);
-    const result = changeShift(
+    const result = await changeShift(
       employee.id,
       String(form.get("shiftId") ?? ""),
       String(form.get("effectiveDate") ?? todayStr()),
@@ -1816,16 +1855,16 @@ function PersonalTab({
 }: {
   employee: Employee;
   canEdit: boolean;
-  updateEmployee: (id: string, patch: EmployeeEditable) => ActionResult;
+  updateEmployee: (id: string, patch: EmployeeEditable) => Promise<ActionResult>;
 }) {
   const toast = useToast();
   const [editing, setEditing] = useState(false);
 
-  function handleSubmit(e: FormEvent<HTMLFormElement>) {
+  async function handleSubmit(e: FormEvent<HTMLFormElement>) {
     e.preventDefault();
     const form = new FormData(e.currentTarget);
     const optional = (key: string) => String(form.get(key) ?? "").trim() || undefined;
-    const result = updateEmployee(employee.id, {
+    const result = await updateEmployee(employee.id, {
       firstName: optional("firstName"),
       lastName: optional("lastName"),
       gender: optional("gender") as Gender | undefined,
@@ -1942,16 +1981,16 @@ function StatutoryTab({
 }: {
   employee: Employee;
   canEdit: boolean;
-  updateEmployee: (id: string, patch: EmployeeEditable) => ActionResult;
+  updateEmployee: (id: string, patch: EmployeeEditable) => Promise<ActionResult>;
 }) {
   const toast = useToast();
   const [editing, setEditing] = useState(false);
 
-  function handleSubmit(e: FormEvent<HTMLFormElement>) {
+  async function handleSubmit(e: FormEvent<HTMLFormElement>) {
     e.preventDefault();
     const form = new FormData(e.currentTarget);
     const optional = (key: string) => String(form.get(key) ?? "").trim() || undefined;
-    const result = updateEmployee(employee.id, {
+    const result = await updateEmployee(employee.id, {
       pan: optional("pan"),
       pfNumber: optional("pfNumber"),
       uan: optional("uan"),
@@ -2016,17 +2055,28 @@ function StatutoryTab({
 function EmergencyTab({
   employee,
   canEdit,
-  updateEmployee,
+  contacts,
+  addEmergencyContact,
+  removeEmergencyContact,
 }: {
   employee: Employee;
   canEdit: boolean;
-  updateEmployee: (id: string, patch: EmployeeEditable) => ActionResult;
+  contacts: EmergencyContact[];
+  addEmergencyContact: (input: {
+    employeeId: string;
+    siteId: string;
+    name: string;
+    relationship: string;
+    phone: string;
+    alternatePhone?: string;
+    address?: string;
+  }) => Promise<ActionResult>;
+  removeEmergencyContact: (employeeId: string, contactId: string) => Promise<ActionResult>;
 }) {
   const toast = useToast();
   const [adding, setAdding] = useState(false);
-  const contacts = employee.emergencyContacts ?? [];
 
-  function handleAdd(e: FormEvent<HTMLFormElement>) {
+  async function handleAdd(e: FormEvent<HTMLFormElement>) {
     e.preventDefault();
     const form = new FormData(e.currentTarget);
     const name = String(form.get("name") ?? "").trim();
@@ -2036,25 +2086,26 @@ function EmergencyTab({
       toast.error("Name, relationship and phone are required.");
       return;
     }
-    const contact: EmergencyContact = {
-      id: `ec-${Date.now().toString(36)}`,
+    const target = e.currentTarget;
+    const result = await addEmergencyContact({
+      employeeId: employee.id,
+      siteId: employee.siteId,
       name,
       relationship,
       phone,
       alternatePhone: String(form.get("alternatePhone") ?? "").trim() || undefined,
       address: String(form.get("address") ?? "").trim() || undefined,
-    };
-    const result = updateEmployee(employee.id, { emergencyContacts: [...contacts, contact] });
-    (result.ok ? toast.success : toast.error)(result.ok ? "Emergency contact added." : result.message);
+    });
+    (result.ok ? toast.success : toast.error)(result.message);
     if (result.ok) {
       setAdding(false);
-      e.currentTarget.reset();
+      target.reset();
     }
   }
 
-  function handleRemove(id: string) {
-    const result = updateEmployee(employee.id, { emergencyContacts: contacts.filter((c) => c.id !== id) });
-    (result.ok ? toast.success : toast.error)(result.ok ? "Emergency contact removed." : result.message);
+  async function handleRemove(id: string) {
+    const result = await removeEmergencyContact(employee.id, id);
+    (result.ok ? toast.success : toast.error)(result.message);
   }
 
   return (
@@ -2124,18 +2175,29 @@ function EmergencyTab({
 function NomineeTab({
   employee,
   canEdit,
-  updateEmployee,
+  nominees,
+  addNominee,
+  removeNominee,
 }: {
   employee: Employee;
   canEdit: boolean;
-  updateEmployee: (id: string, patch: EmployeeEditable) => ActionResult;
+  nominees: Nominee[];
+  addNominee: (input: {
+    employeeId: string;
+    siteId: string;
+    name: string;
+    relationship: string;
+    dateOfBirth?: string;
+    percentage: number;
+    contact?: string;
+  }) => Promise<ActionResult>;
+  removeNominee: (employeeId: string, nomineeId: string) => Promise<ActionResult>;
 }) {
   const toast = useToast();
   const [adding, setAdding] = useState(false);
-  const nominees = employee.nominees ?? [];
   const totalPercentage = nominees.reduce((sum, n) => sum + n.percentage, 0);
 
-  function handleAdd(e: FormEvent<HTMLFormElement>) {
+  async function handleAdd(e: FormEvent<HTMLFormElement>) {
     e.preventDefault();
     const form = new FormData(e.currentTarget);
     const name = String(form.get("name") ?? "").trim();
@@ -2149,25 +2211,26 @@ function NomineeTab({
       toast.error(`Total nominee share can't exceed 100% (currently ${totalPercentage}%).`);
       return;
     }
-    const nominee: Nominee = {
-      id: `nom-${Date.now().toString(36)}`,
+    const target = e.currentTarget;
+    const result = await addNominee({
+      employeeId: employee.id,
+      siteId: employee.siteId,
       name,
       relationship,
       percentage,
       dateOfBirth: String(form.get("dateOfBirth") ?? "").trim() || undefined,
       contact: String(form.get("contact") ?? "").trim() || undefined,
-    };
-    const result = updateEmployee(employee.id, { nominees: [...nominees, nominee] });
-    (result.ok ? toast.success : toast.error)(result.ok ? "Nominee added." : result.message);
+    });
+    (result.ok ? toast.success : toast.error)(result.message);
     if (result.ok) {
       setAdding(false);
-      e.currentTarget.reset();
+      target.reset();
     }
   }
 
-  function handleRemove(id: string) {
-    const result = updateEmployee(employee.id, { nominees: nominees.filter((n) => n.id !== id) });
-    (result.ok ? toast.success : toast.error)(result.ok ? "Nominee removed." : result.message);
+  async function handleRemove(id: string) {
+    const result = await removeNominee(employee.id, id);
+    (result.ok ? toast.success : toast.error)(result.message);
   }
 
   return (
@@ -2241,18 +2304,29 @@ function NomineeTab({
 function ExperienceTab({
   employee,
   canEdit,
-  updateEmployee,
+  experience,
+  addPreviousExperience,
+  removePreviousExperience,
 }: {
   employee: Employee;
   canEdit: boolean;
-  updateEmployee: (id: string, patch: EmployeeEditable) => ActionResult;
+  experience: WorkExperience[];
+  addPreviousExperience: (input: {
+    employeeId: string;
+    siteId: string;
+    company: string;
+    designation: string;
+    startDate: string;
+    endDate?: string;
+    responsibilities?: string;
+  }) => Promise<ActionResult>;
+  removePreviousExperience: (employeeId: string, experienceId: string) => Promise<ActionResult>;
 }) {
   const toast = useToast();
   const [adding, setAdding] = useState(false);
-  const experience = employee.previousExperience ?? [];
   const now = useNow();
 
-  function handleAdd(e: FormEvent<HTMLFormElement>) {
+  async function handleAdd(e: FormEvent<HTMLFormElement>) {
     e.preventDefault();
     const form = new FormData(e.currentTarget);
     const company = String(form.get("company") ?? "").trim();
@@ -2262,25 +2336,26 @@ function ExperienceTab({
       toast.error("Company, designation and start date are required.");
       return;
     }
-    const entry: WorkExperience = {
-      id: `exp-${Date.now().toString(36)}`,
+    const target = e.currentTarget;
+    const result = await addPreviousExperience({
+      employeeId: employee.id,
+      siteId: employee.siteId,
       company,
       designation,
       startDate,
       endDate: String(form.get("endDate") ?? "").trim() || undefined,
       responsibilities: String(form.get("responsibilities") ?? "").trim() || undefined,
-    };
-    const result = updateEmployee(employee.id, { previousExperience: [...experience, entry] });
-    (result.ok ? toast.success : toast.error)(result.ok ? "Experience added." : result.message);
+    });
+    (result.ok ? toast.success : toast.error)(result.message);
     if (result.ok) {
       setAdding(false);
-      e.currentTarget.reset();
+      target.reset();
     }
   }
 
-  function handleRemove(id: string) {
-    const result = updateEmployee(employee.id, { previousExperience: experience.filter((x) => x.id !== id) });
-    (result.ok ? toast.success : toast.error)(result.ok ? "Experience removed." : result.message);
+  async function handleRemove(id: string) {
+    const result = await removePreviousExperience(employee.id, id);
+    (result.ok ? toast.success : toast.error)(result.message);
   }
 
   function years(entry: WorkExperience) {
@@ -2371,16 +2446,16 @@ function BankTab({
     ifsc: string;
     branch: string;
     accountType: BankAccountType;
-  }) => ActionResult;
+  }) => Promise<ActionResult>;
 }) {
   const toast = useToast();
   const [editing, setEditing] = useState(!bank && canManage);
 
-  function handleSubmit(e: FormEvent<HTMLFormElement>) {
+  async function handleSubmit(e: FormEvent<HTMLFormElement>) {
     e.preventDefault();
     const form = new FormData(e.currentTarget);
-    const result = saveBankDetail({
-      employeeId: employee.employeeId,
+    const result = await saveBankDetail({
+      employeeId: employee.id,
       siteId: employee.siteId,
       accountHolderName: String(form.get("accountHolderName") ?? "").trim(),
       bankName: String(form.get("bankName") ?? "").trim(),
@@ -2481,14 +2556,14 @@ function DocumentsTab({
     issueDate?: string;
     expiryDate?: string;
     fileRef?: string;
-  }) => ActionResult;
-  setDocumentStatus: (id: string, status: EmployeeDocumentStatus, verifierName: string) => ActionResult;
+  }) => Promise<ActionResult>;
+  setDocumentStatus: (id: string, status: EmployeeDocumentStatus, verifierName: string) => Promise<ActionResult>;
   verifierName: string;
 }) {
   const toast = useToast();
   const [adding, setAdding] = useState(false);
 
-  function handleAdd(e: FormEvent<HTMLFormElement>) {
+  async function handleAdd(e: FormEvent<HTMLFormElement>) {
     e.preventDefault();
     const form = new FormData(e.currentTarget);
     const documentType = String(form.get("documentType") ?? "").trim();
@@ -2496,8 +2571,9 @@ function DocumentsTab({
       toast.error("Document type is required.");
       return;
     }
-    const result = addDocument({
-      employeeId: employee.employeeId,
+    const target = e.currentTarget;
+    const result = await addDocument({
+      employeeId: employee.id,
       siteId: employee.siteId,
       documentType,
       documentNumber: String(form.get("documentNumber") ?? "").trim() || undefined,
@@ -2508,12 +2584,12 @@ function DocumentsTab({
     (result.ok ? toast.success : toast.error)(result.message);
     if (result.ok) {
       setAdding(false);
-      e.currentTarget.reset();
+      target.reset();
     }
   }
 
-  function handleStatus(id: string, status: EmployeeDocumentStatus) {
-    const result = setDocumentStatus(id, status, verifierName);
+  async function handleStatus(id: string, status: EmployeeDocumentStatus) {
+    const result = await setDocumentStatus(id, status, verifierName);
     (result.ok ? toast.success : toast.error)(result.message);
   }
 

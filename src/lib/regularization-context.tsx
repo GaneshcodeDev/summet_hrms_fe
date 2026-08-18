@@ -4,14 +4,31 @@ import {
   createContext,
   useCallback,
   useContext,
+  useEffect,
   useMemo,
+  useState,
   useSyncExternalStore,
   type ReactNode,
 } from "react";
+import { ApiError } from "@/lib/api/api-client";
+import {
+  applyRegularizationApi,
+  cancelRegularizationApi,
+  decideRegularizationApi,
+  listRegularizations,
+} from "@/lib/api/regularization-api";
+import {
+  apiAttendanceToAttendance,
+  apiRegularizationToRegularization,
+  attendanceStatusToApi,
+} from "@/lib/api/mappers";
+import { getAttendance } from "@/lib/api/attendance-api";
+import { isBackendConnected } from "@/lib/api/token-store";
 import { regularizationsStore } from "@/lib/regularization-store";
 import { attendanceStore, findAttendanceRecord } from "@/lib/attendance-store";
 import { employeesStore } from "@/lib/employee-store";
 import { useAccessControl } from "@/lib/access-control-context";
+import { useSite } from "@/lib/site-context";
 import { useApprovals } from "@/lib/approval-context";
 import type { AttendanceRegularization, AttendanceStatus } from "@/lib/types";
 
@@ -31,20 +48,26 @@ interface ApplyRegularizationInput {
 
 interface RegularizationContextValue {
   regularizations: AttendanceRegularization[];
+  isBackendConnected: boolean;
   requestsFor: (employeeId: string) => AttendanceRegularization[];
   /** Requests the signed-in user can act on for their team, scoped by RBAC + reporting hierarchy (not site). */
   visibleTeamRequests: () => AttendanceRegularization[];
   canDecide: (request: AttendanceRegularization) => boolean;
-  applyRegularization: (input: ApplyRegularizationInput) => ActionResult;
-  approveRegularization: (id: string, note?: string) => ActionResult;
-  rejectRegularization: (id: string, reason: string) => ActionResult;
-  cancelRegularization: (id: string) => ActionResult;
+  applyRegularization: (input: ApplyRegularizationInput) => Promise<ActionResult>;
+  approveRegularization: (id: string, note?: string) => Promise<ActionResult>;
+  rejectRegularization: (id: string, reason: string) => Promise<ActionResult>;
+  cancelRegularization: (id: string) => Promise<ActionResult>;
 }
 
 const RegularizationContext = createContext<RegularizationContextValue | undefined>(undefined);
 
+function errorMessage(error: unknown, fallback: string): string {
+  return error instanceof ApiError ? error.message : fallback;
+}
+
 export function RegularizationProvider({ children }: { children: ReactNode }) {
   const { currentUser, canFeature } = useAccessControl();
+  const { currentSiteId, isAllSites, isSuperAdmin } = useSite();
   const { recordMirroredAction } = useApprovals();
 
   const regularizations = useSyncExternalStore(
@@ -60,6 +83,36 @@ export function RegularizationProvider({ children }: { children: ReactNode }) {
     employeesStore.getSnapshot,
     employeesStore.getServerSnapshot,
   );
+
+  const [connected, setConnected] = useState(false);
+
+  // Backend-authoritative once connected (Phase 18D) — the backend
+  // resolves visibility (self / direct reports / site / global) itself
+  // (spec Step 9/10), so this mirrors attendance-context.tsx's fetch scope
+  // exactly: the selected site, or global for Super Admin's "All Sites".
+  useEffect(() => {
+    let cancelled = false;
+    async function refresh() {
+      if (!isBackendConnected()) {
+        setConnected(false);
+        return;
+      }
+      setConnected(true);
+      if (!isAllSites && !currentSiteId) return;
+      if (isAllSites && !isSuperAdmin) return;
+      try {
+        const apiRequests = await listRegularizations(isAllSites ? {} : { siteId: currentSiteId });
+        if (cancelled) return;
+        regularizationsStore.set(apiRequests.map((r) => apiRegularizationToRegularization(r, employees)));
+      } catch {
+        // Leave the existing cache in place — a transient failure shouldn't blank the page.
+      }
+    }
+    void refresh();
+    return () => {
+      cancelled = true;
+    };
+  }, [currentSiteId, isAllSites, isSuperAdmin, employees]);
 
   const requestsFor = useCallback(
     (employeeId: string) => regularizations.filter((r) => r.employeeId === employeeId),
@@ -92,7 +145,7 @@ export function RegularizationProvider({ children }: { children: ReactNode }) {
   }, [regularizations, currentUser.employeeId, hasBroadScope, canFeature, employees]);
 
   const applyRegularization = useCallback(
-    (input: ApplyRegularizationInput): ActionResult => {
+    async (input: ApplyRegularizationInput): Promise<ActionResult> => {
       if (input.currentStatus === input.requestedStatus) {
         return { ok: false, message: "Requested status must be different from the current status." };
       }
@@ -102,6 +155,37 @@ export function RegularizationProvider({ children }: { children: ReactNode }) {
       if (alreadyPending) {
         return { ok: false, message: `A regularization request for ${input.date} is already pending.` };
       }
+
+      if (isBackendConnected()) {
+        try {
+          // currentStatus is derived server-side from the real attendance
+          // record (more authoritative than the client's guess) — not sent.
+          const created = await applyRegularizationApi({
+            date: input.date,
+            requestedStatus: attendanceStatusToApi(input.requestedStatus),
+            requestedPunchIn: input.requestedPunchIn,
+            requestedPunchOut: input.requestedPunchOut,
+            reason: input.reason,
+          });
+          const request = apiRegularizationToRegularization(created, employees);
+          regularizationsStore.set([request, ...regularizationsStore.getSnapshot().filter((r) => r.id !== request.id)]);
+          recordMirroredAction({
+            siteId: request.siteId ?? currentUser.siteId,
+            module: "Regularization",
+            recordId: request.id,
+            recordOwnerEmployeeId: request.employeeId,
+            recordOwnerName: request.employee,
+            approverType: "REPORTING_MANAGER",
+            action: "APPLY",
+            newStatus: "Pending",
+            timestamp: new Date().toISOString(),
+          });
+          return { ok: true, message: `Regularization request submitted for ${input.date}.` };
+        } catch (error) {
+          return { ok: false, message: errorMessage(error, "Failed to submit regularization request.") };
+        }
+      }
+
       const existingRecord = findAttendanceRecord(currentUser.employeeId, input.date);
       const request: AttendanceRegularization = {
         id: `reg-${Date.now().toString(36)}`,
@@ -134,17 +218,59 @@ export function RegularizationProvider({ children }: { children: ReactNode }) {
       });
       return { ok: true, message: `Regularization request submitted for ${input.date}.` };
     },
-    [currentUser.employeeId, currentUser.name, currentUser.siteId, recordMirroredAction],
+    [currentUser.employeeId, currentUser.name, currentUser.siteId, recordMirroredAction, employees],
   );
 
   const decide = useCallback(
-    (id: string, status: "Approved" | "Rejected", decisionReason?: string): ActionResult => {
+    async (id: string, status: "Approved" | "Rejected", decisionReason?: string): Promise<ActionResult> => {
       const request = regularizationsStore.getSnapshot().find((r) => r.id === id);
       if (!request) return { ok: false, message: "Regularization request not found." };
       if (request.status !== "Pending") return { ok: false, message: "This request has already been decided." };
       if (!canDecide(request)) return { ok: false, message: "You're not authorized to decide this request." };
       if (status === "Rejected" && !decisionReason?.trim()) {
         return { ok: false, message: "A reason is required to reject a regularization request." };
+      }
+
+      if (isBackendConnected()) {
+        try {
+          const decided = await decideRegularizationApi(id, status, decisionReason);
+          const updatedRequest = apiRegularizationToRegularization(decided, employees);
+          regularizationsStore.set(
+            regularizationsStore.getSnapshot().map((r) => (r.id === id ? updatedRequest : r)),
+          );
+          // Approval writes through to the real AttendanceRecord server-side
+          // (full recalculation, spec Step 11) — refresh our local cache of
+          // it so the Attendance page/dashboard reflect it immediately.
+          if (updatedRequest.attendanceRecordId) {
+            try {
+              const record = await getAttendance(updatedRequest.attendanceRecordId);
+              const mapped = apiAttendanceToAttendance(record, employees);
+              attendanceStore.set([mapped, ...attendanceStore.getSnapshot().filter((r) => r.id !== mapped.id)]);
+            } catch {
+              // Non-fatal — the decision itself already succeeded.
+            }
+          }
+          recordMirroredAction({
+            siteId: request.siteId ?? currentUser.siteId,
+            module: "Regularization",
+            recordId: id,
+            recordOwnerEmployeeId: request.employeeId,
+            recordOwnerName: request.employee,
+            approverType: hasBroadScope ? "HR" : "REPORTING_MANAGER",
+            action: status === "Approved" ? "APPROVE" : "REJECT",
+            newStatus: status,
+            comment: decisionReason,
+          });
+          return {
+            ok: true,
+            message:
+              status === "Approved"
+                ? `Approved ${request.employee}'s regularization for ${request.date}.`
+                : `Rejected ${request.employee}'s regularization for ${request.date}.`,
+          };
+        } catch (error) {
+          return { ok: false, message: errorMessage(error, "Failed to decide regularization request.") };
+        }
       }
 
       if (status === "Approved") {
@@ -227,20 +353,31 @@ export function RegularizationProvider({ children }: { children: ReactNode }) {
             : `Rejected ${request.employee}'s regularization for ${request.date}.`,
       };
     },
-    [canDecide, currentUser.employeeId, currentUser.name, currentUser.siteId, hasBroadScope, recordMirroredAction],
+    [canDecide, currentUser.employeeId, currentUser.name, currentUser.siteId, hasBroadScope, recordMirroredAction, employees],
   );
 
   const approveRegularization = useCallback((id: string, note?: string) => decide(id, "Approved", note), [decide]);
   const rejectRegularization = useCallback((id: string, reason: string) => decide(id, "Rejected", reason), [decide]);
 
   const cancelRegularization = useCallback(
-    (id: string): ActionResult => {
+    async (id: string): Promise<ActionResult> => {
       const request = regularizationsStore.getSnapshot().find((r) => r.id === id);
       if (!request) return { ok: false, message: "Regularization request not found." };
       if (request.employeeId !== currentUser.employeeId) {
         return { ok: false, message: "You can only withdraw your own requests." };
       }
       if (request.status !== "Pending") return { ok: false, message: "Only pending requests can be withdrawn." };
+
+      if (isBackendConnected()) {
+        try {
+          await cancelRegularizationApi(id);
+          regularizationsStore.set(regularizationsStore.getSnapshot().filter((r) => r.id !== id));
+          return { ok: true, message: "Regularization request withdrawn." };
+        } catch (error) {
+          return { ok: false, message: errorMessage(error, "Failed to withdraw regularization request.") };
+        }
+      }
+
       regularizationsStore.set(regularizationsStore.getSnapshot().filter((r) => r.id !== id));
       return { ok: true, message: "Regularization request withdrawn." };
     },
@@ -250,6 +387,7 @@ export function RegularizationProvider({ children }: { children: ReactNode }) {
   const value = useMemo<RegularizationContextValue>(
     () => ({
       regularizations,
+      isBackendConnected: connected,
       requestsFor,
       visibleTeamRequests,
       canDecide,
@@ -260,6 +398,7 @@ export function RegularizationProvider({ children }: { children: ReactNode }) {
     }),
     [
       regularizations,
+      connected,
       requestsFor,
       visibleTeamRequests,
       canDecide,

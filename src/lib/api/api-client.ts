@@ -61,7 +61,7 @@ async function refreshAccessToken(): Promise<boolean> {
 }
 
 export interface ApiRequestOptions {
-  method?: "GET" | "POST" | "PATCH" | "DELETE";
+  method?: "GET" | "POST" | "PATCH" | "PUT" | "DELETE";
   body?: unknown;
   /** Skip the Authorization header entirely (login/refresh calls). */
   unauthenticated?: boolean;

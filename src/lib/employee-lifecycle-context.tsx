@@ -55,11 +55,11 @@ interface EmployeeLifecycleContextValue {
   eventsForEmployee: (employeeId: string) => EmployeeLifecycleEvent[];
   canManageLifecycle: boolean;
   canTransferCrossSite: boolean;
-  confirmEmployee: (employeeId: string, input: ConfirmInput) => ActionResult;
-  transferEmployee: (employeeId: string, input: TransferInput) => ActionResult;
-  promoteEmployee: (employeeId: string, input: PromoteInput) => ActionResult;
-  changeManager: (employeeId: string, newManagerEmployeeId: string, comment?: string) => ActionResult;
-  changeShift: (employeeId: string, newShiftId: string, effectiveDate: string, comment?: string) => ActionResult;
+  confirmEmployee: (employeeId: string, input: ConfirmInput) => Promise<ActionResult>;
+  transferEmployee: (employeeId: string, input: TransferInput) => Promise<ActionResult>;
+  promoteEmployee: (employeeId: string, input: PromoteInput) => Promise<ActionResult>;
+  changeManager: (employeeId: string, newManagerEmployeeId: string, comment?: string) => Promise<ActionResult>;
+  changeShift: (employeeId: string, newShiftId: string, effectiveDate: string, comment?: string) => Promise<ActionResult>;
 }
 
 const EmployeeLifecycleContext = createContext<EmployeeLifecycleContextValue | undefined>(undefined);
@@ -114,14 +114,14 @@ export function EmployeeLifecycleProvider({ children }: { children: ReactNode })
   );
 
   const confirmEmployee = useCallback(
-    (employeeId: string, input: ConfirmInput): ActionResult => {
+    async (employeeId: string, input: ConfirmInput): Promise<ActionResult> => {
       if (!canManageLifecycle) return { ok: false, message: "You're not authorized to confirm employees." };
       const employee = getEmployeeById(employeeId);
       if (!employee) return { ok: false, message: "Employee not found." };
       if (employee.employmentStage === "Confirmed") return { ok: false, message: `${employee.name} is already confirmed.` };
       if (employee.employmentStage === "Exited") return { ok: false, message: `${employee.name} has already exited.` };
       const previousStage = employee.employmentStage ?? "Probation";
-      const result = updateEmployee(employee.id, { employmentStage: "Confirmed", confirmationDate: input.confirmationDate } as EmployeeEditable);
+      const result = await updateEmployee(employee.id, { employmentStage: "Confirmed", confirmationDate: input.confirmationDate } as EmployeeEditable);
       if (!result.ok) return result;
       logEvent({
         employeeId: employee.employeeId,
@@ -139,7 +139,7 @@ export function EmployeeLifecycleProvider({ children }: { children: ReactNode })
   );
 
   const transferEmployee = useCallback(
-    (employeeId: string, input: TransferInput): ActionResult => {
+    async (employeeId: string, input: TransferInput): Promise<ActionResult> => {
       if (!canManageLifecycle) return { ok: false, message: "You're not authorized to transfer employees." };
       const employee = getEmployeeById(employeeId);
       if (!employee) return { ok: false, message: "Employee not found." };
@@ -221,7 +221,7 @@ export function EmployeeLifecycleProvider({ children }: { children: ReactNode })
       }
       if (events_.length === 0) return { ok: false, message: "No change to apply — pick at least one target field." };
 
-      const result = updateEmployee(employee.id, patch);
+      const result = await updateEmployee(employee.id, patch);
       if (!result.ok) return result;
 
       for (const e of events_) {
@@ -244,7 +244,7 @@ export function EmployeeLifecycleProvider({ children }: { children: ReactNode })
   );
 
   const promoteEmployee = useCallback(
-    (employeeId: string, input: PromoteInput): ActionResult => {
+    async (employeeId: string, input: PromoteInput): Promise<ActionResult> => {
       if (!canManageLifecycle) return { ok: false, message: "You're not authorized to promote employees." };
       const employee = getEmployeeById(employeeId);
       if (!employee) return { ok: false, message: "Employee not found." };
@@ -258,7 +258,7 @@ export function EmployeeLifecycleProvider({ children }: { children: ReactNode })
       }
       if (input.gradeId) patch.gradeId = input.gradeId;
 
-      const result = updateEmployee(employee.id, patch);
+      const result = await updateEmployee(employee.id, patch);
       if (!result.ok) return result;
 
       logEvent({
@@ -277,7 +277,7 @@ export function EmployeeLifecycleProvider({ children }: { children: ReactNode })
   );
 
   const changeManager = useCallback(
-    (employeeId: string, newManagerEmployeeId: string, comment?: string): ActionResult => {
+    async (employeeId: string, newManagerEmployeeId: string, comment?: string): Promise<ActionResult> => {
       if (!canManageLifecycle) return { ok: false, message: "You're not authorized to change reporting managers." };
       const employee = getEmployeeById(employeeId);
       if (!employee) return { ok: false, message: "Employee not found." };
@@ -290,7 +290,7 @@ export function EmployeeLifecycleProvider({ children }: { children: ReactNode })
         return { ok: false, message: "That would create a reporting loop — choose a different manager." };
       }
       const previousManager = employee.reportingManagerId ? getEmployeeByEmployeeId(employee.reportingManagerId) : undefined;
-      const result = updateEmployee(employee.id, { reportingManagerId: newManagerEmployeeId });
+      const result = await updateEmployee(employee.id, { reportingManagerId: newManagerEmployeeId });
       if (!result.ok) return result;
       logEvent({
         employeeId: employee.employeeId,
@@ -307,7 +307,7 @@ export function EmployeeLifecycleProvider({ children }: { children: ReactNode })
   );
 
   const changeShift = useCallback(
-    (employeeId: string, newShiftId: string, effectiveDate: string, comment?: string): ActionResult => {
+    async (employeeId: string, newShiftId: string, effectiveDate: string, comment?: string): Promise<ActionResult> => {
       if (!canManageLifecycle) return { ok: false, message: "You're not authorized to change shifts." };
       const employee = getEmployeeById(employeeId);
       if (!employee) return { ok: false, message: "Employee not found." };
@@ -320,7 +320,7 @@ export function EmployeeLifecycleProvider({ children }: { children: ReactNode })
       // dates are untouched (Phase 12 section 13), since attendance is
       // written once at mark-time and never re-derived from the employee's
       // current shift.
-      const result = updateEmployee(employee.id, { shiftId: newShiftId });
+      const result = await updateEmployee(employee.id, { shiftId: newShiftId });
       if (!result.ok) return result;
       logEvent({
         employeeId: employee.employeeId,

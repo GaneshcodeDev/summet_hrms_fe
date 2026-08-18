@@ -505,8 +505,8 @@ function AppraisalsTab({
   const completedCases = reviewCases.filter((c) => c.stage === "Completed");
   const cycleAppraisals = appraisals.filter((a) => a.cycleId === cycle.id);
 
-  function act(fn: () => { ok: boolean; message: string }) {
-    const result = fn();
+  async function act(fn: () => { ok: boolean; message: string } | Promise<{ ok: boolean; message: string }>) {
+    const result = await fn();
     (result.ok ? toast.success : toast.error)(result.message);
   }
 

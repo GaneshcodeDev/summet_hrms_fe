@@ -100,8 +100,8 @@ export default function OnboardingCaseDetailPage(props: PageProps<"/onboarding/[
     (result.ok ? toast.success : toast.error)(result.message);
   }
 
-  function handleComplete() {
-    const result = completeOnboarding(record!.id);
+  async function handleComplete() {
+    const result = await completeOnboarding(record!.id);
     (result.ok ? toast.success : toast.error)(result.message);
   }
 

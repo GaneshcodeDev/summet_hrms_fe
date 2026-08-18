@@ -4,3 +4,6 @@ export * from "./auth-api";
 export * from "./sites-api";
 export * from "./organization-api";
 export * from "./masters-api";
+export * from "./employees-api";
+export * from "./attendance-api";
+export * from "./regularization-api";

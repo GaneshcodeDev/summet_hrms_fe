@@ -1,8 +1,28 @@
 "use client";
 
-import { createContext, useCallback, useContext, useMemo, useSyncExternalStore, type ReactNode } from "react";
+import {
+  createContext,
+  useCallback,
+  useContext,
+  useEffect,
+  useMemo,
+  useState,
+  useSyncExternalStore,
+  type ReactNode,
+} from "react";
+import { ApiError } from "@/lib/api/api-client";
+import { createAttendanceApi, listAttendance, updateAttendanceApi } from "@/lib/api/attendance-api";
+import {
+  apiAttendanceToAttendance,
+  attendanceSourceToApi,
+  attendanceStatusToApi,
+  resolveEmployeeDbId,
+} from "@/lib/api/mappers";
+import { isBackendConnected } from "@/lib/api/token-store";
 import { attendanceStore } from "@/lib/attendance-store";
+import { employeesStore } from "@/lib/employee-store";
 import { useAccessControl } from "@/lib/access-control-context";
+import { useSite } from "@/lib/site-context";
 import type { AttendanceRecord, AttendanceSource, AttendanceStatus } from "@/lib/types";
 
 interface ActionResult {
@@ -38,7 +58,15 @@ function toMinutes(hhmm: string): number | undefined {
   return Number(m[1]) * 60 + Number(m[2]);
 }
 
-/** Derives status/workedHours/overtimeHours/lateMinutes from punch times + shift/grace period. Manual status always wins if explicitly provided. */
+/**
+ * Derives status/workedHours/overtimeHours/lateMinutes from punch times +
+ * shift/grace period. Manual status always wins if explicitly provided.
+ * Kept here (rather than deleted) as the fallback calculation used when
+ * the backend isn't connected (see markAttendance/updateAttendanceRecord
+ * below) — once connected, the SAME logic runs server-side
+ * (summet_hrms_be/src/attendance/attendance-engine.ts, ported verbatim)
+ * so both paths agree.
+ */
 function deriveFields(input: {
   punchIn?: string;
   punchOut?: string;
@@ -95,27 +123,68 @@ function deriveFields(input: {
   return { status, workedHours, overtimeHours, lateMinutes, earlyLeavingMinutes };
 }
 
+function errorMessage(error: unknown, fallback: string): string {
+  return error instanceof ApiError ? error.message : fallback;
+}
+
 interface AttendanceContextValue {
   attendance: AttendanceRecord[];
+  isBackendConnected: boolean;
   recordFor: (employeeId: string, date: string) => AttendanceRecord | undefined;
   recordsForEmployee: (employeeId: string) => AttendanceRecord[];
   canMark: boolean;
   canEdit: boolean;
   canApprove: boolean;
-  markAttendance: (input: MarkAttendanceInput) => ActionResult & { record?: AttendanceRecord };
-  updateAttendanceRecord: (id: string, patch: UpdateAttendanceInput, actorName?: string) => ActionResult;
+  markAttendance: (input: MarkAttendanceInput) => Promise<ActionResult & { record?: AttendanceRecord }>;
+  updateAttendanceRecord: (id: string, patch: UpdateAttendanceInput, actorName?: string) => Promise<ActionResult>;
 }
 
 const AttendanceContext = createContext<AttendanceContextValue | undefined>(undefined);
 
 export function AttendanceProvider({ children }: { children: ReactNode }) {
   const { canFeature, currentUser } = useAccessControl();
+  const { currentSiteId, isAllSites, isSuperAdmin } = useSite();
 
   const attendance = useSyncExternalStore(
     attendanceStore.subscribe,
     attendanceStore.getSnapshot,
     attendanceStore.getServerSnapshot,
   );
+  const employees = useSyncExternalStore(
+    employeesStore.subscribe,
+    employeesStore.getSnapshot,
+    employeesStore.getServerSnapshot,
+  );
+
+  const [connected, setConnected] = useState(false);
+
+  // Backend-authoritative once connected (Phase 18D) — the backend itself
+  // resolves visibility (self / direct reports / site / global) per spec
+  // Step 7, so this just mirrors employee-context.tsx's directory fetch:
+  // scoped to the selected site, or global for Super Admin's "All Sites".
+  useEffect(() => {
+    let cancelled = false;
+    async function refresh() {
+      if (!isBackendConnected()) {
+        setConnected(false);
+        return;
+      }
+      setConnected(true);
+      if (!isAllSites && !currentSiteId) return;
+      if (isAllSites && !isSuperAdmin) return;
+      try {
+        const apiRecords = await listAttendance(isAllSites ? {} : { siteId: currentSiteId });
+        if (cancelled) return;
+        attendanceStore.set(apiRecords.map((r) => apiAttendanceToAttendance(r, employees)));
+      } catch {
+        // Leave the existing cache in place — a transient failure shouldn't blank the page.
+      }
+    }
+    void refresh();
+    return () => {
+      cancelled = true;
+    };
+  }, [currentSiteId, isAllSites, isSuperAdmin, employees]);
 
   const recordFor = useCallback(
     (employeeId: string, date: string) => attendance.find((r) => r.employeeId === employeeId && r.date === date),
@@ -131,12 +200,35 @@ export function AttendanceProvider({ children }: { children: ReactNode }) {
   const canApprove = canFeature("attendance.records", "approve") || canFeature("attendance.records", "manage");
 
   const markAttendance = useCallback(
-    (input: MarkAttendanceInput): ActionResult & { record?: AttendanceRecord } => {
+    async (input: MarkAttendanceInput): Promise<ActionResult & { record?: AttendanceRecord }> => {
       if (!canMark) return { ok: false, message: "You're not authorized to mark attendance." };
       const existing = attendanceStore.getSnapshot().find((r) => r.employeeId === input.employeeId && r.date === input.date);
       if (existing) {
         return { ok: false, message: "An attendance record already exists for this employee on this date — edit it instead." };
       }
+
+      if (isBackendConnected()) {
+        const employeeDbId = resolveEmployeeDbId(input.employeeId, employees);
+        if (!employeeDbId) return { ok: false, message: "Employee not found." };
+        try {
+          const created = await createAttendanceApi({
+            employeeId: employeeDbId,
+            date: input.date,
+            punchIn: input.punchIn,
+            punchOut: input.punchOut,
+            status: input.status ? attendanceStatusToApi(input.status) : undefined,
+            shiftId: input.shiftId,
+            source: input.source ? attendanceSourceToApi(input.source) : undefined,
+            remarks: input.remarks,
+          });
+          const record = apiAttendanceToAttendance(created, employees);
+          attendanceStore.set([record, ...attendanceStore.getSnapshot().filter((r) => r.id !== record.id)]);
+          return { ok: true, message: `Attendance marked for ${input.date}.`, record };
+        } catch (error) {
+          return { ok: false, message: errorMessage(error, "Failed to mark attendance.") };
+        }
+      }
+
       const derived = deriveFields(input);
       const now = new Date().toISOString();
       const record: AttendanceRecord = {
@@ -161,14 +253,32 @@ export function AttendanceProvider({ children }: { children: ReactNode }) {
       attendanceStore.set([record, ...attendanceStore.getSnapshot()]);
       return { ok: true, message: `Attendance marked for ${input.date}.`, record };
     },
-    [canMark, currentUser.name],
+    [canMark, currentUser.name, employees],
   );
 
   const updateAttendanceRecord = useCallback(
-    (id: string, patch: UpdateAttendanceInput, actorName?: string): ActionResult => {
+    async (id: string, patch: UpdateAttendanceInput, actorName?: string): Promise<ActionResult> => {
       if (!canEdit) return { ok: false, message: "You're not authorized to edit attendance." };
       const existing = attendanceStore.getSnapshot().find((r) => r.id === id);
       if (!existing) return { ok: false, message: "Attendance record not found." };
+
+      if (isBackendConnected()) {
+        try {
+          const updated = await updateAttendanceApi(id, {
+            punchIn: patch.punchIn !== undefined ? patch.punchIn || "" : undefined,
+            punchOut: patch.punchOut !== undefined ? patch.punchOut || "" : undefined,
+            status: patch.status ? attendanceStatusToApi(patch.status) : undefined,
+            shiftId: patch.shiftId,
+            remarks: patch.remarks,
+          });
+          const record = apiAttendanceToAttendance(updated, employees);
+          attendanceStore.set(attendanceStore.getSnapshot().map((r) => (r.id === id ? record : r)));
+          return { ok: true, message: `Attendance for ${existing.date} updated.` };
+        } catch (error) {
+          return { ok: false, message: errorMessage(error, "Failed to update attendance.") };
+        }
+      }
+
       const merged = {
         punchIn: patch.punchIn !== undefined ? patch.punchIn : existing.punchIn,
         punchOut: patch.punchOut !== undefined ? patch.punchOut : existing.punchOut,
@@ -200,12 +310,13 @@ export function AttendanceProvider({ children }: { children: ReactNode }) {
       );
       return { ok: true, message: `Attendance for ${existing.date} updated.` };
     },
-    [canEdit, currentUser.name],
+    [canEdit, currentUser.name, employees],
   );
 
   const value = useMemo<AttendanceContextValue>(
     () => ({
       attendance,
+      isBackendConnected: connected,
       recordFor,
       recordsForEmployee,
       canMark,
@@ -214,7 +325,7 @@ export function AttendanceProvider({ children }: { children: ReactNode }) {
       markAttendance,
       updateAttendanceRecord,
     }),
-    [attendance, recordFor, recordsForEmployee, canMark, canEdit, canApprove, markAttendance, updateAttendanceRecord],
+    [attendance, connected, recordFor, recordsForEmployee, canMark, canEdit, canApprove, markAttendance, updateAttendanceRecord],
   );
 
   return <AttendanceContext.Provider value={value}>{children}</AttendanceContext.Provider>;

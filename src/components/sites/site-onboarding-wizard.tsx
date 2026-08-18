@@ -443,7 +443,7 @@ export function SiteOnboardingWizard() {
 
     // Site Admin — a real Employee + a real UserAccount, not a UI-only label.
     // Marked isAdminAccount so they don't inflate the site's employee headcount.
-    const employeeResult = createEmployee({
+    const employeeResult = await createEmployee({
       name: admin.fullName.trim(),
       email: admin.email.trim(),
       phone: "",

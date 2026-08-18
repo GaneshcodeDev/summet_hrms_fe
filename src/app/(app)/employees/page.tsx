@@ -114,35 +114,36 @@ export default function EmployeesPage() {
     };
   }
 
-  function handleAddEmployee(e: FormEvent<HTMLFormElement>) {
+  async function handleAddEmployee(e: FormEvent<HTMLFormElement>) {
     e.preventDefault();
     const form = new FormData(e.currentTarget);
     const fallbackSiteId = isAllSites ? sites[0]?.id ?? "" : currentSiteId;
-    const result = createEmployee(readDraft(form, fallbackSiteId));
+    const target = e.currentTarget;
+    const result = await createEmployee(readDraft(form, fallbackSiteId));
     (result.ok ? toast.success : toast.error)(result.message);
     if (result.ok) {
       setAddOpen(false);
-      e.currentTarget.reset();
+      target.reset();
     }
   }
 
-  function handleEditSubmit(e: FormEvent<HTMLFormElement>) {
+  async function handleEditSubmit(e: FormEvent<HTMLFormElement>) {
     e.preventDefault();
     if (!editTarget) return;
     const form = new FormData(e.currentTarget);
-    const result = updateEmployee(editTarget.id, readDraft(form, editTarget.siteId));
+    const result = await updateEmployee(editTarget.id, readDraft(form, editTarget.siteId));
     (result.ok ? toast.success : toast.error)(result.message);
     if (result.ok) setEditTarget(null);
   }
 
-  function handleToggleStatus(employee: Employee) {
-    const result = setEmployeeStatus(employee.id, employee.status === "Active" ? "Inactive" : "Active");
+  async function handleToggleStatus(employee: Employee) {
+    const result = await setEmployeeStatus(employee.id, employee.status === "Active" ? "Inactive" : "Active");
     (result.ok ? toast.success : toast.error)(result.message);
   }
 
-  function handleDeleteConfirm() {
+  async function handleDeleteConfirm() {
     if (!deleteTarget) return;
-    const result = deleteEmployee(deleteTarget.id);
+    const result = await deleteEmployee(deleteTarget.id);
     (result.ok ? toast.success : toast.error)(result.message);
     if (result.ok) setDeleteTarget(null);
   }
