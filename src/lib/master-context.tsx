@@ -10,7 +10,7 @@ import {
 } from "react";
 import { masterAuditStore, masterRecordsStore, logMasterAudit } from "@/lib/master-store";
 import { masterTypeConfig } from "@/lib/master-data";
-import { employees } from "@/lib/mock-data";
+import { useEmployees } from "@/lib/employee-context";
 import { useAccessControl } from "@/lib/access-control-context";
 import { useSite } from "@/lib/site-context";
 import { apiMasterRecordToMasterRecord } from "@/lib/api/mappers";
@@ -71,6 +71,7 @@ const editableFields: (keyof MasterEditable)[] = ["name", "code", "siteId", "des
 export function MasterProvider({ children }: { children: ReactNode }) {
   const { currentUser } = useAccessControl();
   const { currentSiteId, isAllSites } = useSite();
+  const { employees } = useEmployees();
 
   const records = useSyncExternalStore(
     masterRecordsStore.subscribe,
@@ -123,7 +124,7 @@ export function MasterProvider({ children }: { children: ReactNode }) {
         record.masterType === "Designation" ? employees.filter((e) => e.designation === record.name).length : 0;
       return referencingRecords + referencingEmployees;
     },
-    [records],
+    [records, employees],
   );
 
   const createRecord = useCallback(

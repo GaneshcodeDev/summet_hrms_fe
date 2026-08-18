@@ -6,11 +6,13 @@ import { Select } from "@/components/ui/form";
 import { TreeChart } from "@/components/organization/tree-chart";
 import { useOrg } from "@/lib/org-context";
 import { useSite } from "@/lib/site-context";
+import { useEmployees } from "@/lib/employee-context";
 import { buildOrgUnitTree } from "@/lib/org-utils";
 
 export default function OrganizationChartPage() {
   const { orgUnits } = useOrg();
   const { sites, currentSiteId, isAllSites } = useSite();
+  const { getEmployeeByEmployeeId } = useEmployees();
 
   const companies = useMemo(
     () => orgUnits.filter((u) => u.type === "Company" && (isAllSites || u.siteId === currentSiteId)),
@@ -19,7 +21,7 @@ export default function OrganizationChartPage() {
 
   const [rootId, setRootId] = useState<string | undefined>(undefined);
   const activeRootId = rootId && companies.some((c) => c.id === rootId) ? rootId : companies[0]?.id;
-  const tree = activeRootId ? buildOrgUnitTree(orgUnits, activeRootId) : null;
+  const tree = activeRootId ? buildOrgUnitTree(orgUnits, activeRootId, getEmployeeByEmployeeId) : null;
 
   return (
     <div className="space-y-4">

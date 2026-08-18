@@ -15,7 +15,7 @@ import { Can } from "@/components/auth/permission-gate";
 import { useOrg } from "@/lib/org-context";
 import { useSite } from "@/lib/site-context";
 import { useToast } from "@/lib/toast-context";
-import { employees } from "@/lib/mock-data";
+import { useEmployees } from "@/lib/employee-context";
 import { orgUnitTypeConfig } from "@/lib/org-data";
 import { downloadCsv } from "@/lib/utils";
 import { locationKinds } from "@/lib/types";
@@ -42,17 +42,18 @@ function SortIndicator({ active, dir }: { active: boolean; dir: "asc" | "desc" }
   return dir === "asc" ? <ArrowUp className="h-3 w-3" /> : <ArrowDown className="h-3 w-3" />;
 }
 
-function headName(id?: string) {
-  if (!id) return "—";
-  return employees.find((e) => e.employeeId === id)?.name ?? "—";
-}
-
 export function OrgUnitManager({ type }: { type: OrgUnitType }) {
   const config = orgUnitTypeConfig[type];
   const { orgUnits, ancestorsOf, descendantIdsOf, auditFor, createOrgUnit, updateOrgUnit, setOrgUnitStatus } = useOrg();
   const { sites, currentSiteId, isAllSites } = useSite();
   const toast = useToast();
+  const { employees } = useEmployees();
   const searchParams = useSearchParams();
+
+  function headName(id?: string) {
+    if (!id) return "—";
+    return employees.find((e) => e.employeeId === id)?.name ?? "—";
+  }
 
   const [search, setSearch] = useState("");
   const [statusFilter, setStatusFilter] = useState("All Status");
@@ -509,6 +510,7 @@ function UnitFormModal({
 }: UnitFormModalProps) {
   const [siteId, setSiteId] = useState(initial?.siteId ?? defaultSiteId);
   const [parentId, setParentId] = useState(initial?.parentId ?? "");
+  const { employees } = useEmployees();
 
   const eligibleParents = parentCandidates.filter((p) => p.siteId === siteId && !excludeParentIds.has(p.id));
   const parentRequired = config.allowedParentTypes.length > 0;

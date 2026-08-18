@@ -6,7 +6,7 @@ import { Card } from "@/components/ui/card";
 import { Avatar } from "@/components/ui/avatar";
 import { Select } from "@/components/ui/form";
 import { TBody, TableFootnote, Td, Th, THead, Table, Tr } from "@/components/ui/table";
-import { employees } from "@/lib/mock-data";
+import { useEmployees } from "@/lib/employee-context";
 import { useOrg } from "@/lib/org-context";
 import { useSiteProfile } from "@/lib/site-profile-context";
 import { useSite, useSiteFilter } from "@/lib/site-context";
@@ -15,6 +15,7 @@ import { useToast } from "@/lib/toast-context";
 
 export default function EmployeeSiteMappingPage() {
   const { isAllSites, currentSite } = useSite();
+  const { employees } = useEmployees();
   const { orgUnits } = useOrg();
   const { employeeSiteMappings, setEmployeeMapping } = useSiteProfile();
   const { canFeature } = useAccessControl();

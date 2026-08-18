@@ -10,7 +10,7 @@ import { StatusBadge } from "@/components/ui/status-badge";
 import { SiteLogo } from "@/components/ui/site-logo";
 import { useSite } from "@/lib/site-context";
 import { useEmployees } from "@/lib/employee-context";
-import { loadDemoData } from "@/lib/demo-seed";
+import { isDemoDataEnabled, loadDemoData } from "@/lib/demo-seed";
 
 export default function SitesPage() {
   const { sites, setCurrentSiteId } = useSite();
@@ -37,19 +37,23 @@ export default function SitesPage() {
                 <Plus className="h-4 w-4" /> Create Your First Site
               </Button>
             </Link>
-            <Button
-              variant="outline"
-              onClick={() => {
-                loadDemoData();
-                window.location.reload();
-              }}
-            >
-              <Sparkles className="h-4 w-4" /> Load Demo Data
-            </Button>
+            {isDemoDataEnabled && (
+              <Button
+                variant="outline"
+                onClick={() => {
+                  loadDemoData();
+                  window.location.reload();
+                }}
+              >
+                <Sparkles className="h-4 w-4" /> Load Demo Data
+              </Button>
+            )}
           </div>
-          <p className="text-xs text-slate-400 dark:text-slate-500">
-            Load Demo Data hydrates the platform with a sample multi-site dataset for development/testing.
-          </p>
+          {isDemoDataEnabled && (
+            <p className="text-xs text-slate-400 dark:text-slate-500">
+              Load Demo Data hydrates the platform with a sample multi-site dataset for development/testing.
+            </p>
+          )}
         </Card>
       </div>
     );

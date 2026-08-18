@@ -12,9 +12,9 @@ import { StatusBadge } from "@/components/ui/status-badge";
 import { StatCard } from "@/components/ui/stat-card";
 import { Can } from "@/components/auth/permission-gate";
 import { EmptyRow, TBody, TableFootnote, Td, Th, THead, Table, Tr } from "@/components/ui/table";
-import { departments } from "@/lib/mock-data";
 import { useEmployees } from "@/lib/employee-context";
 import { useOnboarding } from "@/lib/onboarding-context";
+import { useOrg } from "@/lib/org-context";
 import { useSite, useSiteFilter } from "@/lib/site-context";
 import { useToast } from "@/lib/toast-context";
 
@@ -32,12 +32,17 @@ function ProgressBar({ value }: { value: number }) {
 export default function OnboardingPage() {
   const { sites, isAllSites, currentSite } = useSite();
   const { employees } = useEmployees();
+  const { orgUnits } = useOrg();
   const toast = useToast();
   const { visibleCases, progressFor, createCase } = useOnboarding();
   const [modalOpen, setModalOpen] = useState(false);
 
   const cases = useMemo(() => visibleCases(), [visibleCases]);
   const filteredCases = useSiteFilter(cases);
+  const departments = useMemo(
+    () => orgUnits.filter((u) => u.type === "Department" && (isAllSites || u.siteId === currentSite?.id)),
+    [orgUnits, isAllSites, currentSite?.id],
+  );
 
   const stats = {
     total: filteredCases.length,

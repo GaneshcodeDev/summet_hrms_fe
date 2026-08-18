@@ -16,7 +16,7 @@ import { useSiteProfile } from "@/lib/site-profile-context";
 import { useAccessControl } from "@/lib/access-control-context";
 import { useToast } from "@/lib/toast-context";
 import { orgUnitTypeConfig } from "@/lib/org-data";
-import { employees } from "@/lib/mock-data";
+import { useEmployees } from "@/lib/employee-context";
 import { siteCategories, siteCurrencies, siteSegments } from "@/lib/site-profile-data";
 import type { OrgUnitType, SiteProfile } from "@/lib/types";
 
@@ -44,6 +44,7 @@ export function SiteProfileDetail({ type, orgUnitId }: { type: OrgUnitType; orgU
     setEmployeeMapping,
   } = useSiteProfile();
   const { canFeature, roles } = useAccessControl();
+  const { employees } = useEmployees();
   const toast = useToast();
   const [active, setActive] = useState("basic");
 

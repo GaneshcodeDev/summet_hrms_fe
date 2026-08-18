@@ -53,7 +53,7 @@ import { useAssets } from "@/lib/asset-context";
 import { getAssetInventorySummary } from "@/lib/asset-engine";
 import { useExpense } from "@/lib/expense-context";
 import { getExpenseSummary, getTravelSummary } from "@/lib/expense-engine";
-import { loadDemoData } from "@/lib/demo-seed";
+import { isDemoDataEnabled, loadDemoData } from "@/lib/demo-seed";
 import {
   currentCycleCaseFor,
   getAttendanceTrend,
@@ -125,15 +125,17 @@ function EmptyPlatformState() {
               <Plus className="h-4 w-4" /> Create Your First Site
             </Button>
           </Link>
-          <Button
-            variant="outline"
-            onClick={() => {
-              loadDemoData();
-              window.location.reload();
-            }}
-          >
-            <Sparkles className="h-4 w-4" /> Load Demo Data
-          </Button>
+          {isDemoDataEnabled && (
+            <Button
+              variant="outline"
+              onClick={() => {
+                loadDemoData();
+                window.location.reload();
+              }}
+            >
+              <Sparkles className="h-4 w-4" /> Load Demo Data
+            </Button>
+          )}
         </div>
       </Card>
     </div>

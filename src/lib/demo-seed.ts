@@ -106,6 +106,16 @@ import type {
 } from "@/lib/types";
 
 /**
+ * True in local dev (`next dev`) and any non-production build. False in a
+ * production build (`next build && next start`) — Next.js inlines
+ * `process.env.NODE_ENV` as the literal "production" at build time, so this
+ * evaluates once, at build time, to a hard `false`. Every "Load Demo Data"
+ * button/link is gated on this, so the affordance can never render — let
+ * alone run — for a real user in a production deployment.
+ */
+export const isDemoDataEnabled = process.env.NODE_ENV !== "production";
+
+/**
  * Generates attendance for the last 10 working days for real employees —
  * never a static array, and never for employees that don't exist. Rebuilt
  * from today's date each time demo data is (re)loaded, so it's never stuck
